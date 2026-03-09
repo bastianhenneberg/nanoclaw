@@ -3,7 +3,8 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { DATA_DIR, GROUPS_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { sendPoolMessage, sendPoolPhoto } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
@@ -12,6 +13,7 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendPhoto: (jid: string, filePath: string, caption?: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -22,6 +24,47 @@ export interface IpcDeps {
     availableGroups: AvailableGroup[],
     registeredJids: Set<string>,
   ) => void;
+}
+
+/**
+ * Translate a container filesystem path to the corresponding host path.
+ * Container mounts:
+ *   /workspace/group/    → groups/{groupFolder}/
+ *   /workspace/extra/*   → additionalMounts from containerConfig
+ *   /workspace/project/  → project root (cwd)
+ */
+function resolveHostPath(containerPath: string, sourceGroup: string, registeredGroups: Record<string, RegisteredGroup>): string | null {
+  if (containerPath.startsWith('/workspace/group/')) {
+    return path.join(GROUPS_DIR, sourceGroup, containerPath.slice('/workspace/group/'.length));
+  }
+  if (containerPath === '/workspace/group') {
+    return path.join(GROUPS_DIR, sourceGroup);
+  }
+  if (containerPath.startsWith('/workspace/extra/')) {
+    // Find the group's additionalMounts config to resolve the mapping
+    for (const group of Object.values(registeredGroups)) {
+      if (group.folder !== sourceGroup) continue;
+      const mounts = group.containerConfig?.additionalMounts;
+      if (!mounts) break;
+      // /workspace/extra/{containerPath} → match against mount containerPath
+      const relativePath = containerPath.slice('/workspace/extra/'.length);
+      for (const mount of mounts) {
+        const mountName = mount.containerPath || path.basename(mount.hostPath);
+        if (relativePath === mountName || relativePath.startsWith(mountName + '/')) {
+          const subPath = relativePath.slice(mountName.length).replace(/^\//, '');
+          return subPath ? path.join(mount.hostPath, subPath) : mount.hostPath;
+        }
+      }
+      break;
+    }
+    logger.warn({ containerPath, sourceGroup }, 'Cannot resolve /workspace/extra/ path — no matching mount');
+    return null;
+  }
+  if (containerPath.startsWith('/workspace/project/')) {
+    return path.join(process.cwd(), containerPath.slice('/workspace/project/'.length));
+  }
+  // Not a known container path — return as-is (might be absolute host path already)
+  return containerPath;
 }
 
 let ipcWatcherRunning = false;
@@ -73,18 +116,53 @@ export function startIpcWatcher(deps: IpcDeps): void {
             const filePath = path.join(messagesDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              if (data.type === 'message' && data.chatJid && data.text) {
+              if (data.chatJid && (data.type === 'message' || data.type === 'photo')) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
                 if (
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await deps.sendMessage(data.chatJid, data.text);
-                  logger.info(
-                    { chatJid: data.chatJid, sourceGroup },
-                    'IPC message sent',
-                  );
+                  if (data.type === 'photo' && data.filePath && data.chatJid.startsWith('tg:')) {
+                    // Resolve container path → host path
+                    const hostFilePath = resolveHostPath(data.filePath, sourceGroup, registeredGroups);
+                    if (!hostFilePath || !fs.existsSync(hostFilePath)) {
+                      logger.error(
+                        { containerPath: data.filePath, hostFilePath, sourceGroup },
+                        'Photo file not found on host',
+                      );
+                    } else if (data.sender) {
+                      await sendPoolPhoto(
+                        data.chatJid,
+                        hostFilePath,
+                        data.caption,
+                        data.sender,
+                        sourceGroup,
+                      );
+                    } else {
+                      await deps.sendPhoto(data.chatJid, hostFilePath, data.caption);
+                    }
+                    logger.info(
+                      { chatJid: data.chatJid, sourceGroup, sender: data.sender, containerPath: data.filePath, hostPath: hostFilePath },
+                      'IPC photo sent',
+                    );
+                  } else if (data.type === 'message' && data.text) {
+                    // Text message
+                    if (data.sender && data.chatJid.startsWith('tg:')) {
+                      await sendPoolMessage(
+                        data.chatJid,
+                        data.text,
+                        data.sender,
+                        sourceGroup,
+                      );
+                    } else {
+                      await deps.sendMessage(data.chatJid, data.text);
+                    }
+                    logger.info(
+                      { chatJid: data.chatJid, sourceGroup, sender: data.sender },
+                      'IPC message sent',
+                    );
+                  }
                 } else {
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
