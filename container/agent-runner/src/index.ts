@@ -389,6 +389,38 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  const mcpServers: Record<string, any> = {
+    nanoclaw: {
+      command: 'node',
+      args: [mcpServerPath],
+      env: {
+        NANOCLAW_CHAT_JID: containerInput.chatJid,
+        NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+        NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+      },
+    },
+    ...(process.env.PEPPERMINT_API_TOKEN ? {
+      peppermint: {
+        type: 'http' as const,
+        url: 'https://pm.peppermint-digital.com/mcp/peppermint',
+        headers: {
+          'Authorization': `Bearer ${process.env.PEPPERMINT_API_TOKEN}`,
+        },
+      },
+    } : {}),
+    ...(process.env.AI_BRAIN_TOKEN ? {
+      'ai-brain': {
+        type: 'http' as const,
+        url: 'https://brain.proxy.peppermint-digital.com/mcp/brain',
+        headers: {
+          'Authorization': `Bearer ${process.env.AI_BRAIN_TOKEN}`,
+        },
+      },
+    } : {}),
+  };
+  log(`MCP servers configured: ${Object.keys(mcpServers).join(', ')}`);
+  log(`AI_BRAIN_TOKEN set: ${!!process.env.AI_BRAIN_TOKEN}`);
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -408,32 +440,14 @@ async function runQuery(
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
-        'mcp__peppermint__*'
+        'mcp__peppermint__*',
+        'mcp__ai-brain__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-          },
-        },
-        ...(process.env.PEPPERMINT_API_TOKEN ? {
-          peppermint: {
-            type: 'http' as const,
-            url: 'https://pm.peppermint-digital.com/mcp/peppermint',
-            headers: {
-              'Authorization': `Bearer ${process.env.PEPPERMINT_API_TOKEN}`,
-            },
-          },
-        } : {}),
-      },
+      mcpServers,
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
       },

@@ -191,8 +191,20 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  if (fs.existsSync(agentRunnerSrc)) {
+    // Always sync source files from the canonical agent-runner into the
+    // per-group cache. This ensures code changes (new MCP servers, bug fixes)
+    // propagate to existing sessions without requiring manual cache cleanup.
+    // Agent-added files in the group dir are preserved (we only overwrite
+    // files that exist in the source).
+    fs.mkdirSync(groupAgentRunnerDir, { recursive: true });
+    for (const file of fs.readdirSync(agentRunnerSrc)) {
+      const src = path.join(agentRunnerSrc, file);
+      const dst = path.join(groupAgentRunnerDir, file);
+      if (fs.statSync(src).isFile()) {
+        fs.copyFileSync(src, dst);
+      }
+    }
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
@@ -244,6 +256,12 @@ function buildContainerArgs(
   const pmSecrets = readEnvFile(['PEPPERMINT_API_TOKEN']);
   if (pmSecrets.PEPPERMINT_API_TOKEN) {
     args.push('-e', `PEPPERMINT_API_TOKEN=${pmSecrets.PEPPERMINT_API_TOKEN}`);
+  }
+
+  // Pass AI Brain token if configured
+  const brainSecrets = readEnvFile(['AI_BRAIN_TOKEN']);
+  if (brainSecrets.AI_BRAIN_TOKEN) {
+    args.push('-e', `AI_BRAIN_TOKEN=${brainSecrets.AI_BRAIN_TOKEN}`);
   }
 
   // Runtime-specific args for host gateway resolution

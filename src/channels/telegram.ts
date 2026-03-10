@@ -232,8 +232,7 @@ function setupBotHandlers(bot: Bot, opts: TelegramChannelOpts): void {
       }
     }
 
-    const isGroup =
-      ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
     opts.onChatMetadata(chatJid, timestamp, chatName, 'telegram', isGroup);
 
     const group = opts.registeredGroups()[chatJid];
@@ -278,8 +277,7 @@ function setupBotHandlers(bot: Bot, opts: TelegramChannelOpts): void {
       'Unknown';
     const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
-    const isGroup =
-      ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
     opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
 
     // Track which bot serves this group
@@ -366,7 +364,9 @@ export class TelegramChannel implements Channel {
    * falling back to the main (first) bot.
    */
   private getApiForJid(jid: string): Api | null {
-    return jidBotMap.get(jid) || (this.bots.length > 0 ? this.bots[0].api : null);
+    return (
+      jidBotMap.get(jid) || (this.bots.length > 0 ? this.bots[0].api : null)
+    );
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
