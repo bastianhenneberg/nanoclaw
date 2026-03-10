@@ -212,6 +212,16 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // SSH keys (read-only) so agents can git push
+  const sshDir = path.join(process.env.HOME || '/home/node', '.ssh');
+  if (fs.existsSync(sshDir)) {
+    mounts.push({
+      hostPath: sshDir,
+      containerPath: '/home/node/.ssh',
+      readonly: true,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
@@ -263,6 +273,12 @@ function buildContainerArgs(
   if (brainSecrets.AI_BRAIN_TOKEN) {
     args.push('-e', `AI_BRAIN_TOKEN=${brainSecrets.AI_BRAIN_TOKEN}`);
   }
+
+  // Git config so agents can commit and push
+  args.push('-e', 'GIT_AUTHOR_NAME=Peppermint Digital');
+  args.push('-e', 'GIT_AUTHOR_EMAIL=department@peppermint-digital.de');
+  args.push('-e', 'GIT_COMMITTER_NAME=Peppermint Digital');
+  args.push('-e', 'GIT_COMMITTER_EMAIL=department@peppermint-digital.de');
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());

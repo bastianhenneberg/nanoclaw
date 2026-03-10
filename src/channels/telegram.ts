@@ -327,10 +327,17 @@ export class TelegramChannel implements Channel {
   }
 
   async connect(): Promise<void> {
-    const startPromises = this.botTokens.map((token, index) => {
+    const startPromises = this.botTokens.map(async (token, index) => {
       const bot = new Bot(token);
       this.bots.push(bot);
       setupBotHandlers(bot, this.opts);
+
+      // Clear any stale polling sessions from a previous (killed) process
+      try {
+        await bot.api.deleteWebhook({ drop_pending_updates: false });
+      } catch (err) {
+        logger.debug({ err }, 'deleteWebhook before polling (non-critical)');
+      }
 
       return new Promise<void>((resolve) => {
         bot.start({
