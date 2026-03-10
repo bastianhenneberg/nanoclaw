@@ -2,6 +2,12 @@
 
 All notable changes to NanoClaw will be documented in this file.
 
+## [1.3.0](https://github.com/qwibitai/nanoclaw/compare/v1.2.0...v1.3.0)
+
+- **feat:** Telegram multi-bot support — run multiple bots via `TELEGRAM_EXTRA_BOTS` env var
+- **feat:** Message deduplication when multiple bots share the same group
+- **feat:** Auto-routing sends replies via the correct bot per group
+
 ## [1.2.0](https://github.com/qwibitai/nanoclaw/compare/v1.1.6...v1.2.0)
 
 [BREAKING] WhatsApp removed from core, now a skill. Run `/add-whatsapp` to re-add (existing auth/groups preserved).
