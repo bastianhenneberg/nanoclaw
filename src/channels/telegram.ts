@@ -81,7 +81,10 @@ export async function sendPoolMessage(
 /**
  * Get or assign a pool bot for a sender, with optional rename.
  */
-async function getPoolApi(sender: string, groupFolder: string): Promise<Api | null> {
+async function getPoolApi(
+  sender: string,
+  groupFolder: string,
+): Promise<Api | null> {
   if (poolApis.length === 0) {
     logger.warn('No pool bots available');
     return null;
@@ -96,9 +99,15 @@ async function getPoolApi(sender: string, groupFolder: string): Promise<Api | nu
     try {
       await poolApis[idx].setMyName(sender);
       await new Promise((r) => setTimeout(r, 2000));
-      logger.info({ sender, groupFolder, poolIndex: idx }, 'Assigned and renamed pool bot');
+      logger.info(
+        { sender, groupFolder, poolIndex: idx },
+        'Assigned and renamed pool bot',
+      );
     } catch (err) {
-      logger.warn({ sender, err }, 'Failed to rename pool bot (sending anyway)');
+      logger.warn(
+        { sender, err },
+        'Failed to rename pool bot (sending anyway)',
+      );
     }
   }
   return poolApis[idx];
@@ -119,12 +128,19 @@ export async function sendPoolPhoto(
 
   try {
     const numericId = chatId.replace(/^tg:/, '');
-    await api.sendPhoto(numericId, new InputFile(fs.createReadStream(filePath)), {
-      caption: caption || undefined,
-    });
+    await api.sendPhoto(
+      numericId,
+      new InputFile(fs.createReadStream(filePath)),
+      {
+        caption: caption || undefined,
+      },
+    );
     logger.info({ chatId, sender, filePath }, 'Pool photo sent');
   } catch (err) {
-    logger.error({ chatId, sender, filePath, err }, 'Failed to send pool photo');
+    logger.error(
+      { chatId, sender, filePath, err },
+      'Failed to send pool photo',
+    );
   }
 }
 
@@ -208,8 +224,15 @@ export class TelegramChannel implements Channel {
       }
 
       // Store chat metadata for discovery
-      const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-      this.opts.onChatMetadata(chatJid, timestamp, chatName, 'telegram', isGroup);
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        chatName,
+        'telegram',
+        isGroup,
+      );
 
       // Only deliver full message for registered groups
       const group = this.opts.registeredGroups()[chatJid];
@@ -252,8 +275,15 @@ export class TelegramChannel implements Channel {
         'Unknown';
       const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
-      const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-      this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
       this.opts.onMessage(chatJid, {
         id: ctx.message.message_id.toString(),
         chat_jid: chatJid,
@@ -267,9 +297,7 @@ export class TelegramChannel implements Channel {
 
     this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) =>
-      storeNonText(ctx, '[Voice message]'),
-    );
+    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
     this.bot.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
@@ -349,7 +377,11 @@ export class TelegramChannel implements Channel {
     }
   }
 
-  async sendPhoto(jid: string, filePath: string, caption?: string): Promise<void> {
+  async sendPhoto(
+    jid: string,
+    filePath: string,
+    caption?: string,
+  ): Promise<void> {
     if (!this.bot) {
       logger.warn('Telegram bot not initialized');
       return;
@@ -357,9 +389,13 @@ export class TelegramChannel implements Channel {
 
     try {
       const numericId = jid.replace(/^tg:/, '');
-      await this.bot.api.sendPhoto(numericId, new InputFile(fs.createReadStream(filePath)), {
-        caption: caption || undefined,
-      });
+      await this.bot.api.sendPhoto(
+        numericId,
+        new InputFile(fs.createReadStream(filePath)),
+        {
+          caption: caption || undefined,
+        },
+      );
       logger.info({ jid, filePath }, 'Telegram photo sent');
     } catch (err) {
       logger.error({ jid, filePath, err }, 'Failed to send Telegram photo');

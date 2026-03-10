@@ -573,7 +573,8 @@ async function main(): Promise<void> {
     sendPhoto: (jid, filePath, caption) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      if (!('sendPhoto' in channel)) throw new Error(`Channel for ${jid} does not support photos`);
+      if (!('sendPhoto' in channel))
+        throw new Error(`Channel for ${jid} does not support photos`);
       return (channel as any).sendPhoto(jid, filePath, caption);
     },
     registeredGroups: () => registeredGroups,
