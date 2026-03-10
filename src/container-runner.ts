@@ -26,6 +26,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -236,6 +237,12 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Pass Peppermint API token if configured
+  const pmSecrets = readEnvFile(['PEPPERMINT_API_TOKEN']);
+  if (pmSecrets.PEPPERMINT_API_TOKEN) {
+    args.push('-e', `PEPPERMINT_API_TOKEN=${pmSecrets.PEPPERMINT_API_TOKEN}`);
   }
 
   // Runtime-specific args for host gateway resolution

@@ -44,12 +44,16 @@ server.tool(
   "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
   {
     text: z.string().describe('The message text to send'),
-    sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
+    sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram groups. Only works in group chats — pool bots cannot send to private chats.'),
+    chat_jid: z.string().optional().describe('(Main group only) Target chat JID to send to. Defaults to the current chat. Use this to send team messages to a group chat (e.g. "tg:-5071189865") instead of the private chat.'),
   },
   async (args) => {
+    // Main can override target; non-main always sends to own chat
+    const targetJid = isMain && args.chat_jid ? args.chat_jid : chatJid;
+
     const data: Record<string, string | undefined> = {
       type: 'message',
-      chatJid,
+      chatJid: targetJid,
       text: args.text,
       sender: args.sender || undefined,
       groupFolder,
@@ -59,6 +63,41 @@ server.tool(
     writeIpcFile(MESSAGES_DIR, data);
 
     return { content: [{ type: 'text' as const, text: 'Message sent.' }] };
+  },
+);
+
+server.tool(
+  'send_photo',
+  'Send a photo/image file to the user or group. The file must exist on the container filesystem (e.g. in /workspace/group/, /workspace/extra/, or a generated file).',
+  {
+    file_path: z.string().describe('Absolute path to the image file on the container filesystem'),
+    caption: z.string().optional().describe('Optional caption for the photo'),
+    sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, photo is sent from a dedicated bot in Telegram groups.'),
+    chat_jid: z.string().optional().describe('(Main group only) Target chat JID. Defaults to current chat.'),
+  },
+  async (args) => {
+    if (!fs.existsSync(args.file_path)) {
+      return {
+        content: [{ type: 'text' as const, text: `File not found: ${args.file_path}` }],
+        isError: true,
+      };
+    }
+
+    const targetJid = isMain && args.chat_jid ? args.chat_jid : chatJid;
+
+    const data: Record<string, string | undefined> = {
+      type: 'photo',
+      chatJid: targetJid,
+      filePath: args.file_path,
+      caption: args.caption || undefined,
+      sender: args.sender || undefined,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: 'Photo sent.' }] };
   },
 );
 
