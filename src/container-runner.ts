@@ -28,7 +28,7 @@ import {
 import { detectAuthMode } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
-import { RegisteredGroup } from './types.js';
+import { ContainerConfig, RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -216,6 +216,7 @@ function buildVolumeMounts(
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  containerConfig?: ContainerConfig,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -266,6 +267,17 @@ function buildContainerArgs(
     }
   }
 
+  // Expose ports declared in container_config
+  if (containerConfig?.exposedPorts) {
+    for (const port of containerConfig.exposedPorts) {
+      if (typeof port !== 'number' || port < 1 || port > 65535) {
+        logger.warn({ port }, 'Ignoring invalid exposed port');
+        continue;
+      }
+      args.push('-p', `${port}:${port}`);
+    }
+  }
+
   args.push(CONTAINER_IMAGE);
 
   return args;
@@ -285,7 +297,7 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerArgs = buildContainerArgs(mounts, containerName, group.containerConfig);
 
   logger.debug(
     {
