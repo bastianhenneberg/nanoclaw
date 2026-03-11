@@ -4,6 +4,7 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  EMAIL_GROUP_JID,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
   TELEGRAM_BOT_POOL,
@@ -12,10 +13,7 @@ import {
   WEBHOOK_BIND_HOST,
   WEBHOOK_PORT,
 } from './config.js';
-import {
-  injectMemoryIntoPrompt,
-  scheduleMemoryFlush,
-} from './memory.js';
+import { injectMemoryIntoPrompt, scheduleMemoryFlush } from './memory.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
@@ -526,6 +524,23 @@ async function main(): Promise<void> {
   // Channel callbacks (shared by all channels)
   const channelOpts = {
     onMessage: (chatJid: string, msg: NewMessage) => {
+      // Email wildcard routing: if an email arrives for a sender that has no
+      // dedicated registered group, reroute to EMAIL_GROUP_JID so a single
+      // group can process all incoming emails.
+      if (
+        chatJid.startsWith('email:') &&
+        !registeredGroups[chatJid] &&
+        EMAIL_GROUP_JID &&
+        registeredGroups[EMAIL_GROUP_JID]
+      ) {
+        logger.debug(
+          { from: chatJid, to: EMAIL_GROUP_JID },
+          'Email wildcard routing: rerouting to default email group',
+        );
+        msg = { ...msg, chat_jid: EMAIL_GROUP_JID };
+        chatJid = EMAIL_GROUP_JID;
+      }
+
       // Sender allowlist drop mode: discard messages from denied senders before storing
       if (!msg.is_from_me && !msg.is_bot_message && registeredGroups[chatJid]) {
         const cfg = loadSenderAllowlist();

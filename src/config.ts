@@ -33,6 +33,7 @@ const envConfig = readEnvFile([
   'EMAIL_MARK_SEEN',
   'EMAIL_MAX_BODY_CHARS',
   'EMAIL_SUBJECT_PREFIX',
+  'EMAIL_GROUP_JID',
 ]);
 
 export const ASSISTANT_NAME =
@@ -144,7 +145,8 @@ export const EMAIL_IMAP_PORT = parseInt(
 export const EMAIL_IMAP_MAILBOX =
   process.env.EMAIL_IMAP_MAILBOX || envConfig.EMAIL_IMAP_MAILBOX || 'INBOX';
 export const EMAIL_IMAP_USE_SSL =
-  (process.env.EMAIL_IMAP_USE_SSL ?? envConfig.EMAIL_IMAP_USE_SSL ?? 'true') !== 'false';
+  (process.env.EMAIL_IMAP_USE_SSL ?? envConfig.EMAIL_IMAP_USE_SSL ?? 'true') !==
+  'false';
 
 export const EMAIL_SMTP_HOST =
   process.env.EMAIL_SMTP_HOST || envConfig.EMAIL_SMTP_HOST || '';
@@ -153,9 +155,12 @@ export const EMAIL_SMTP_PORT = parseInt(
   10,
 );
 export const EMAIL_SMTP_USE_TLS =
-  (process.env.EMAIL_SMTP_USE_TLS ?? envConfig.EMAIL_SMTP_USE_TLS ?? 'true') !== 'false';
+  (process.env.EMAIL_SMTP_USE_TLS ?? envConfig.EMAIL_SMTP_USE_TLS ?? 'true') !==
+  'false';
 export const EMAIL_SMTP_USE_SSL =
-  (process.env.EMAIL_SMTP_USE_SSL ?? envConfig.EMAIL_SMTP_USE_SSL ?? 'false') === 'true';
+  (process.env.EMAIL_SMTP_USE_SSL ??
+    envConfig.EMAIL_SMTP_USE_SSL ??
+    'false') === 'true';
 
 export const EMAIL_ADDRESS =
   process.env.EMAIL_ADDRESS || envConfig.EMAIL_ADDRESS || '';
@@ -166,25 +171,38 @@ export const EMAIL_FROM_ADDRESS =
 
 export const EMAIL_POLL_INTERVAL = Math.max(
   5,
-  parseInt(process.env.EMAIL_POLL_INTERVAL || envConfig.EMAIL_POLL_INTERVAL || '30', 10),
+  parseInt(
+    process.env.EMAIL_POLL_INTERVAL || envConfig.EMAIL_POLL_INTERVAL || '30',
+    10,
+  ),
 );
 export const EMAIL_ALLOWED_SENDERS = (
-  process.env.EMAIL_ALLOWED_SENDERS || envConfig.EMAIL_ALLOWED_SENDERS || '*'
+  process.env.EMAIL_ALLOWED_SENDERS ||
+  envConfig.EMAIL_ALLOWED_SENDERS ||
+  '*'
 )
   .split(',')
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
 export const EMAIL_AUTO_REPLY =
-  (process.env.EMAIL_AUTO_REPLY ?? envConfig.EMAIL_AUTO_REPLY ?? 'true') !== 'false';
+  (process.env.EMAIL_AUTO_REPLY ?? envConfig.EMAIL_AUTO_REPLY ?? 'true') !==
+  'false';
 export const EMAIL_MARK_SEEN =
-  (process.env.EMAIL_MARK_SEEN ?? envConfig.EMAIL_MARK_SEEN ?? 'true') !== 'false';
+  (process.env.EMAIL_MARK_SEEN ?? envConfig.EMAIL_MARK_SEEN ?? 'true') !==
+  'false';
 export const EMAIL_MAX_BODY_CHARS = parseInt(
   process.env.EMAIL_MAX_BODY_CHARS || envConfig.EMAIL_MAX_BODY_CHARS || '12000',
   10,
 );
 export const EMAIL_SUBJECT_PREFIX =
   process.env.EMAIL_SUBJECT_PREFIX || envConfig.EMAIL_SUBJECT_PREFIX || 'Re: ';
+
+// Wildcard email routing: chat_jid of the registered group that should receive
+// all incoming emails that have no dedicated per-sender group registered.
+// Example: EMAIL_GROUP_JID=tg:-1234567890  (your Telegram group JID)
+export const EMAIL_GROUP_JID =
+  process.env.EMAIL_GROUP_JID || envConfig.EMAIL_GROUP_JID || '';
 
 export const TELEGRAM_BOT_POOL = (
   process.env.TELEGRAM_BOT_POOL ||
