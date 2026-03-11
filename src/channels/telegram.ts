@@ -1,8 +1,11 @@
 import fs from 'fs';
+import path from 'path';
 import { Api, Bot, InputFile } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import { processImage } from '../image.js';
+import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -294,7 +297,58 @@ function setupBotHandlers(bot: Bot, opts: TelegramChannelOpts): void {
     });
   };
 
-  bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+  bot.on('message:photo', async (ctx) => {
+    if (!dedup(ctx.message.message_id.toString())) return;
+    const chatJid = `tg:${ctx.chat.id}`;
+    const group = opts.registeredGroups()[chatJid];
+    if (!group) return;
+
+    const timestamp = new Date(ctx.message.date * 1000).toISOString();
+    const senderName =
+      ctx.from?.first_name ||
+      ctx.from?.username ||
+      ctx.from?.id?.toString() ||
+      'Unknown';
+    const caption = ctx.message.caption || '';
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+    jidBotMap.set(chatJid, ctx.api);
+
+    // Download the largest photo size
+    const photos = ctx.message.photo;
+    const largest = photos[photos.length - 1];
+    let content = caption ? `[Photo] ${caption}` : '[Photo]';
+
+    try {
+      const file = await ctx.api.getFile(largest.file_id);
+      // Grammy provides a helper to get the download URL
+      const url = `https://api.telegram.org/file/bot${bot.token}/${file.file_path}`;
+      const resp = await fetch(url);
+      const buffer = Buffer.from(await resp.arrayBuffer());
+
+      const groupDir = resolveGroupFolderPath(group.folder);
+      const processed = await processImage(buffer, groupDir, caption);
+      if (processed) {
+        content = processed.content;
+        logger.info(
+          { chatJid, path: processed.relativePath },
+          'Processed Telegram image attachment',
+        );
+      }
+    } catch (err) {
+      logger.error({ chatJid, err }, 'Failed to download Telegram photo');
+    }
+
+    opts.onMessage(chatJid, {
+      id: ctx.message.message_id.toString(),
+      chat_jid: chatJid,
+      sender: ctx.from?.id?.toString() || '',
+      sender_name: senderName,
+      content,
+      timestamp,
+      is_from_me: false,
+    });
+  });
   bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
   bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
   bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
