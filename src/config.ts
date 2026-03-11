@@ -83,10 +83,7 @@ export const TIMEZONE =
 // Webhook server configuration
 // Set WEBHOOK_PORT > 0 to enable the HTTP webhook endpoint.
 // External services POST to /webhook/:groupFolder to inject messages.
-export const WEBHOOK_PORT = parseInt(
-  process.env.WEBHOOK_PORT || '0',
-  10,
-); // 0 = disabled
+export const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || '0', 10); // 0 = disabled
 export const WEBHOOK_BIND_HOST = process.env.WEBHOOK_BIND_HOST || '127.0.0.1';
 export const WEBHOOK_SECRET =
   process.env.WEBHOOK_SECRET || envConfig.WEBHOOK_SECRET || '';
@@ -94,7 +91,9 @@ export const WEBHOOK_SECRET =
 // LLM provider for direct (non-agent) webhook processing.
 // 'claude' uses the local credential proxy; 'ollama' calls an Ollama server.
 export const WEBHOOK_LLM_PROVIDER =
-  process.env.WEBHOOK_LLM_PROVIDER || envConfig.WEBHOOK_LLM_PROVIDER || 'claude';
+  process.env.WEBHOOK_LLM_PROVIDER ||
+  envConfig.WEBHOOK_LLM_PROVIDER ||
+  'claude';
 export const OLLAMA_HOST =
   process.env.OLLAMA_HOST || envConfig.OLLAMA_HOST || 'http://localhost:11434';
 export const OLLAMA_MODEL =

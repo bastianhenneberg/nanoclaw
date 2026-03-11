@@ -19,6 +19,7 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+const hostGroupsDir = process.env.NANOCLAW_HOST_GROUPS_DIR || '';
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -368,6 +369,37 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 
     return {
       content: [{ type: 'text' as const, text: `Group "${args.name}" registered. It will start receiving messages immediately.` }],
+    };
+  },
+);
+
+server.tool(
+  'resolve_host_path',
+  'Resolve a container-local file path to its absolute host filesystem path. Use this when passing file paths to external MCP servers (e.g. ai-brain screenshot_path) that run on the host and need the real filesystem path.',
+  {
+    container_path: z.string().describe('Path relative to /workspace/group/ (e.g. "attachments/img-1234.jpg")'),
+  },
+  async (args) => {
+    if (!hostGroupsDir) {
+      return {
+        content: [{ type: 'text' as const, text: 'Host path resolution not available (NANOCLAW_HOST_GROUPS_DIR not set).' }],
+        isError: true,
+      };
+    }
+
+    const hostPath = path.join(hostGroupsDir, groupFolder, args.container_path);
+
+    // Verify the file exists in the container to catch typos early
+    const containerFullPath = path.join('/workspace/group', args.container_path);
+    if (!fs.existsSync(containerFullPath)) {
+      return {
+        content: [{ type: 'text' as const, text: `File not found in container: ${containerFullPath}` }],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: hostPath }],
     };
   },
 );

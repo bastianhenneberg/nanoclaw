@@ -64,11 +64,7 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
   });
 }
 
-function sendJson(
-  res: ServerResponse,
-  status: number,
-  body: unknown,
-): void {
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     'Content-Type': 'application/json',
@@ -245,10 +241,15 @@ async function handleLlmWebhook(
 
   const providerOverride = body['provider'] as LlmProvider | undefined;
   const modelOverride = body['model'] as string | undefined;
-  const system = typeof body['system'] === 'string' ? body['system'] : undefined;
+  const system =
+    typeof body['system'] === 'string' ? body['system'] : undefined;
 
   logger.info(
-    { groupFolder, provider: providerOverride ?? 'default', model: modelOverride },
+    {
+      groupFolder,
+      provider: providerOverride ?? 'default',
+      model: modelOverride,
+    },
     'Direct LLM webhook call',
   );
 
@@ -348,10 +349,7 @@ export function startWebhookServer(
     server.listen(port, host, () => {
       const addr = server.address();
       const actualPort = typeof addr === 'object' && addr ? addr.port : port;
-      logger.info(
-        { port: actualPort, host },
-        'Webhook server started',
-      );
+      logger.info({ port: actualPort, host }, 'Webhook server started');
       resolve(server);
     });
   });

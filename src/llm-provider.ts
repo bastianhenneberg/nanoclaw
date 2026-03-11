@@ -207,10 +207,7 @@ export async function callLlm(
     case 'claude':
       return callClaude(req);
     default:
-      logger.warn(
-        { provider },
-        'Unknown LLM provider, falling back to claude',
-      );
+      logger.warn({ provider }, 'Unknown LLM provider, falling back to claude');
       return callClaude(req);
   }
 }
