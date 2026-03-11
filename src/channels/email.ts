@@ -20,8 +20,15 @@
  *   EMAIL_MARK_SEEN=true            (default true)
  */
 import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { pipeline } from 'stream/promises';
+import { createWriteStream } from 'fs';
 import { createTransport } from 'nodemailer';
 import { ImapFlow } from 'imapflow';
+
+import { EmailAttachment } from '../types.js';
 
 import {
   EMAIL_ADDRESS,
@@ -44,7 +51,12 @@ import {
   EMAIL_SUBJECT_PREFIX,
 } from '../config.js';
 import { logger } from '../logger.js';
-import { Channel, NewMessage, OnInboundMessage, OnChatMetadata } from '../types.js';
+import {
+  Channel,
+  NewMessage,
+  OnInboundMessage,
+  OnChatMetadata,
+} from '../types.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 
 // JID prefix used for email "chats" — each sender address is a unique chat
@@ -88,7 +100,9 @@ class EmailChannel implements Channel {
       return;
     }
     if (!EMAIL_IMAP_HOST || !EMAIL_ADDRESS || !EMAIL_PASSWORD) {
-      logger.warn('Email channel: missing required config (EMAIL_IMAP_HOST, EMAIL_ADDRESS, EMAIL_PASSWORD)');
+      logger.warn(
+        'Email channel: missing required config (EMAIL_IMAP_HOST, EMAIL_ADDRESS, EMAIL_PASSWORD)',
+      );
       return;
     }
 
@@ -130,7 +144,8 @@ class EmailChannel implements Channel {
     }
 
     const to = jidToEmail(jid);
-    const lastSubject = this.lastSubjectBySender.get(to) ?? 'Message from assistant';
+    const lastSubject =
+      this.lastSubjectBySender.get(to) ?? 'Message from assistant';
     const inReplyTo = this.lastMessageIdBySender.get(to);
 
     const subject = lastSubject.toLowerCase().startsWith('re:')
@@ -209,7 +224,7 @@ class EmailChannel implements Channel {
     for await (const msg of client.fetch('1:*', {
       uid: true,
       envelope: true,
-      bodyParts: ['TEXT'],
+      bodyStructure: true,
       flags: true,
     })) {
       // Skip already-seen UIDs (in-memory dedup across polls)
@@ -225,36 +240,99 @@ class EmailChannel implements Channel {
       const envelope = msg.envelope;
       if (!envelope) continue;
 
-      const senderAddress =
-        envelope.from?.[0]?.address?.toLowerCase() ?? '';
+      const senderAddress = envelope.from?.[0]?.address?.toLowerCase() ?? '';
       if (!senderAddress) continue;
 
       if (!isSenderAllowed(senderAddress)) {
-        logger.debug({ sender: senderAddress }, 'Email from disallowed sender, skipping');
+        logger.debug(
+          { sender: senderAddress },
+          'Email from disallowed sender, skipping',
+        );
         this.seenUids.add(uid);
         if (EMAIL_MARK_SEEN) {
-          await client.messageFlagsAdd(String(msg.uid), ['\\Seen'], { uid: true });
+          await client.messageFlagsAdd(String(msg.uid), ['\\Seen'], {
+            uid: true,
+          });
         }
         continue;
       }
 
-      // Extract plain-text body
+      // Walk MIME structure to find text body and attachment parts
+      const textParts: string[] = [];
+      const attachmentParts: MimePart[] = [];
+      walkBodyStructure(msg.bodyStructure, textParts, attachmentParts);
+
+      // Download plain-text body
       let body = '';
-      for (const [, part] of msg.bodyParts ?? []) {
-        const raw = part instanceof Buffer ? part.toString('utf-8') : String(part);
-        body += raw;
+      for (const partNum of textParts) {
+        try {
+          const dl = await client.download(uid, partNum, { uid: true });
+          if (dl?.content) {
+            const chunks: Buffer[] = [];
+            for await (const chunk of dl.content) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            body += Buffer.concat(chunks).toString('utf-8');
+          }
+        } catch (err) {
+          logger.debug({ uid, partNum, err }, 'Failed to download text part');
+        }
       }
       body = body.slice(0, EMAIL_MAX_BODY_CHARS).trim();
+
+      // Download attachments and save to a per-message temp directory
+      const attachments: EmailAttachment[] = [];
+      if (attachmentParts.length > 0) {
+        const tmpDir = path.join(
+          os.tmpdir(),
+          `nanoclaw-email-${uid}-${Date.now()}`,
+        );
+        fs.mkdirSync(tmpDir, { recursive: true });
+
+        for (const part of attachmentParts) {
+          const safeName = sanitizeFilename(part.filename || `attachment-${part.partNum}`);
+          const filePath = path.join(tmpDir, safeName);
+          try {
+            const dl = await client.download(uid, part.partNum, { uid: true });
+            if (dl?.content) {
+              await pipeline(dl.content, createWriteStream(filePath));
+              const sizeBytes = fs.statSync(filePath).size;
+              attachments.push({
+                filename: safeName,
+                mimeType: part.mimeType,
+                tempPath: filePath,
+                sizeBytes,
+              });
+              logger.debug(
+                { uid, filename: safeName, sizeBytes },
+                'Email attachment saved',
+              );
+            }
+          } catch (err) {
+            logger.warn({ uid, filename: safeName, err }, 'Failed to download attachment');
+          }
+        }
+      }
 
       const subject = envelope.subject ?? '(no subject)';
       const messageId = envelope.messageId ?? '';
       const dateStr = envelope.date?.toISOString() ?? new Date().toISOString();
 
-      results.push({ uid, senderAddress, subject, messageId, dateStr, body });
+      results.push({
+        uid,
+        senderAddress,
+        subject,
+        messageId,
+        dateStr,
+        body,
+        attachments,
+      });
 
       this.seenUids.add(uid);
       if (EMAIL_MARK_SEEN) {
-        await client.messageFlagsAdd(String(msg.uid), ['\\Seen'], { uid: true });
+        await client.messageFlagsAdd(String(msg.uid), ['\\Seen'], {
+          uid: true,
+        });
       }
 
       // Trim seen set to avoid unbounded growth
@@ -268,7 +346,7 @@ class EmailChannel implements Channel {
   }
 
   private async handleIncomingEmail(email: ParsedEmail): Promise<void> {
-    const { senderAddress, subject, messageId, dateStr, body, uid } = email;
+    const { senderAddress, subject, messageId, dateStr, body, uid, attachments } = email;
     const chatJid = emailToJid(senderAddress);
 
     // Track reply-threading state
@@ -278,15 +356,32 @@ class EmailChannel implements Channel {
     // Notify channel registry about this chat
     this.onChatMetadata(chatJid, dateStr, senderAddress, 'email', false);
 
-    // Format content the same way NanoBot does — structured plaintext blob
-    const content = [
+    // Format content — structured plaintext blob (same as NanoBot)
+    const lines = [
       'Email received.',
       `From: ${senderAddress}`,
       `Subject: ${subject}`,
       `Date: ${dateStr}`,
-      '',
-      body || '(empty body)',
-    ].join('\n');
+    ];
+
+    if (attachments.length > 0) {
+      lines.push(
+        `Attachments (${attachments.length}): ${attachments.map((a) => a.filename).join(', ')}`,
+      );
+    }
+
+    lines.push('', body || '(empty body)');
+
+    if (attachments.length > 0) {
+      lines.push('', '--- Attachments ---');
+      for (const att of attachments) {
+        // Container path will be rewritten by index.ts after routing.
+        // Use a placeholder that index.ts replaces with the actual container path.
+        lines.push(`[ATTACHMENT name="${att.filename}" type="${att.mimeType}" size="${att.sizeBytes}" tempPath="${att.tempPath}"]`);
+      }
+    }
+
+    const content = lines.join('\n');
 
     const message: NewMessage = {
       id: `email-${uid}-${crypto.randomUUID()}`,
@@ -297,10 +392,11 @@ class EmailChannel implements Channel {
       timestamp: dateStr,
       is_from_me: false,
       is_bot_message: false,
+      emailAttachments: attachments.length > 0 ? attachments : undefined,
     };
 
     logger.info(
-      { from: senderAddress, subject, uid },
+      { from: senderAddress, subject, uid, attachmentCount: attachments.length },
       'Incoming email received',
     );
 
@@ -333,6 +429,67 @@ interface ParsedEmail {
   messageId: string;
   dateStr: string;
   body: string;
+  attachments: EmailAttachment[];
+}
+
+interface MimePart {
+  partNum: string;
+  mimeType: string;
+  filename: string;
+}
+
+/**
+ * Recursively walk an imapflow bodyStructure tree.
+ * Fills textParts (part numbers for text/plain) and attachmentParts.
+ */
+function walkBodyStructure(
+  node: any,
+  textParts: string[],
+  attachmentParts: MimePart[],
+): void {
+  if (!node) return;
+
+  // Multipart: recurse into children
+  if (node.childNodes && Array.isArray(node.childNodes)) {
+    for (const child of node.childNodes) {
+      walkBodyStructure(child, textParts, attachmentParts);
+    }
+    return;
+  }
+
+  const type = (node.type || '').toLowerCase();
+  const subtype = (node.subtype || '').toLowerCase();
+  const disposition = (node.disposition || '').toLowerCase();
+  const partNum = node.part || '1';
+  const mimeType = `${type}/${subtype}`;
+
+  // Collect plain-text body (not attachment disposition)
+  if (type === 'text' && subtype === 'plain' && disposition !== 'attachment') {
+    textParts.push(partNum);
+    return;
+  }
+
+  // Collect attachments — explicit disposition or non-text content types
+  if (
+    disposition === 'attachment' ||
+    disposition === 'inline' ||
+    type === 'application' ||
+    (type === 'image' && disposition === 'attachment')
+  ) {
+    const filename =
+      node.dispositionParameters?.filename ||
+      node.parameters?.name ||
+      `${partNum}.bin`;
+    attachmentParts.push({ partNum, mimeType, filename });
+  }
+}
+
+/** Strip dangerous characters from filenames. */
+function sanitizeFilename(name: string): string {
+  return name
+    .replace(/[/\\:*?"<>|]/g, '_')
+    .replace(/^\.+/, '_')
+    .slice(0, 200);
 }
 
 // ─── Channel registration ──────────────────────────────────────────────────

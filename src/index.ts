@@ -5,6 +5,7 @@ import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
   EMAIL_GROUP_JID,
+  GROUPS_DIR,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
   TELEGRAM_BOT_POOL,
@@ -557,6 +558,37 @@ async function main(): Promise<void> {
           return;
         }
       }
+      // Email attachment handling: copy temp files into the target group folder
+      // so the agent container can access them at /workspace/group/attachments/
+      if (msg.emailAttachments && msg.emailAttachments.length > 0) {
+        const groupFolder = registeredGroups[chatJid]?.folder;
+        if (groupFolder) {
+          const attDir = path.join(GROUPS_DIR, groupFolder, 'attachments');
+          fs.mkdirSync(attDir, { recursive: true });
+
+          let updatedContent = msg.content;
+          for (const att of msg.emailAttachments) {
+            const destFilename = `email-${Date.now()}-${att.filename}`;
+            const destPath = path.join(attDir, destFilename);
+            try {
+              fs.copyFileSync(att.tempPath, destPath);
+              // Rewrite placeholder with the container-accessible path
+              updatedContent = updatedContent.replace(
+                `tempPath="${att.tempPath}"`,
+                `path="/workspace/group/attachments/${destFilename}"`,
+              );
+              logger.info(
+                { groupFolder, filename: destFilename },
+                'Email attachment copied to group folder',
+              );
+            } catch (err) {
+              logger.warn({ err, src: att.tempPath }, 'Failed to copy email attachment');
+            }
+          }
+          msg = { ...msg, content: updatedContent };
+        }
+      }
+
       storeMessage(msg);
     },
     onChatMetadata: (
