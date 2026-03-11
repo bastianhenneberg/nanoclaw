@@ -14,6 +14,7 @@ const envConfig = readEnvFile([
   'OLLAMA_HOST',
   'OLLAMA_MODEL',
   'WEBHOOK_LLM_PROVIDER',
+  'MEMORY_ENABLED',
 ]);
 
 export const ASSISTANT_NAME =
@@ -98,6 +99,13 @@ export const OLLAMA_HOST =
   process.env.OLLAMA_HOST || envConfig.OLLAMA_HOST || 'http://localhost:11434';
 export const OLLAMA_MODEL =
   process.env.OLLAMA_MODEL || envConfig.OLLAMA_MODEL || 'llama3.2';
+
+// Persistent memory system
+// When enabled, key facts from each session are distilled and stored as
+// Markdown files under groups/{folder}/memory/. Context is injected into
+// subsequent sessions so the agent remembers past conversations.
+export const MEMORY_ENABLED =
+  (process.env.MEMORY_ENABLED ?? envConfig.MEMORY_ENABLED ?? 'true') !== 'false';
 
 export const TELEGRAM_BOT_POOL = (
   process.env.TELEGRAM_BOT_POOL ||

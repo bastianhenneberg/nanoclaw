@@ -12,6 +12,10 @@ import {
   WEBHOOK_BIND_HOST,
   WEBHOOK_PORT,
 } from './config.js';
+import {
+  injectMemoryIntoPrompt,
+  scheduleMemoryFlush,
+} from './memory.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
@@ -322,11 +326,14 @@ async function runAgent(
       }
     : undefined;
 
+  // Inject persistent memory context as a preamble to the prompt
+  const promptWithMemory = injectMemoryIntoPrompt(prompt, group.folder);
+
   try {
     const output = await runContainerAgent(
       group,
       {
-        prompt,
+        prompt: promptWithMemory,
         sessionId,
         groupFolder: group.folder,
         chatJid,
@@ -350,6 +357,12 @@ async function runAgent(
         'Container agent error',
       );
       return 'error';
+    }
+
+    // After a successful session, distill memorable facts into memory storage.
+    // Runs fire-and-forget so it never blocks the response.
+    if (output.result) {
+      scheduleMemoryFlush(group.folder, prompt, output.result);
     }
 
     return 'success';
