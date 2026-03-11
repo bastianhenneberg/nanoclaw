@@ -275,6 +275,10 @@ function buildContainerArgs(
     args.push('-e', `AI_BRAIN_TOKEN=${brainSecrets.AI_BRAIN_TOKEN}`);
   }
 
+  // Pass host groups directory so agents can resolve container paths to host paths
+  // (used for passing screenshot paths to external MCP servers like ai-brain)
+  args.push('-e', `NANOCLAW_HOST_GROUPS_DIR=${GROUPS_DIR}`);
+
   // Git config so agents can commit and push
   args.push('-e', 'GIT_AUTHOR_NAME=Peppermint Digital');
   args.push('-e', 'GIT_AUTHOR_EMAIL=department@peppermint-digital.de');
