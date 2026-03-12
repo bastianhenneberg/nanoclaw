@@ -268,7 +268,14 @@ class EmailChannel implements Channel {
       const attachmentParts: MimePart[] = [];
       walkBodyStructure(msg.bodyStructure, textParts, attachmentParts);
 
-      pending.push({ uid, senderAddress, envelope, bodyStructure: msg.bodyStructure, textParts, attachmentParts });
+      pending.push({
+        uid,
+        senderAddress,
+        envelope,
+        bodyStructure: msg.bodyStructure,
+        textParts,
+        attachmentParts,
+      });
     }
 
     // Phase 2: Mark disallowed messages as seen (after fetch loop)
@@ -296,7 +303,10 @@ class EmailChannel implements Channel {
             body += Buffer.concat(chunks).toString('utf-8');
           }
         } catch (err) {
-          logger.debug({ uid: msg.uid, partNum, err }, 'Failed to download text part');
+          logger.debug(
+            { uid: msg.uid, partNum, err },
+            'Failed to download text part',
+          );
         }
       }
       body = body.slice(0, EMAIL_MAX_BODY_CHARS).trim();
@@ -316,7 +326,9 @@ class EmailChannel implements Channel {
           );
           const filePath = path.join(tmpDir, safeName);
           try {
-            const dl = await client.download(msg.uid, part.partNum, { uid: true });
+            const dl = await client.download(msg.uid, part.partNum, {
+              uid: true,
+            });
             if (dl?.content) {
               await pipeline(dl.content, createWriteStream(filePath));
               const sizeBytes = fs.statSync(filePath).size;
@@ -338,7 +350,8 @@ class EmailChannel implements Channel {
 
       const subject = msg.envelope.subject ?? '(no subject)';
       const messageId = msg.envelope.messageId ?? '';
-      const dateStr = msg.envelope.date?.toISOString() ?? new Date().toISOString();
+      const dateStr =
+        msg.envelope.date?.toISOString() ?? new Date().toISOString();
 
       results.push({
         uid: msg.uid,
@@ -362,10 +375,7 @@ class EmailChannel implements Channel {
       this.seenUids = new Set(entries.slice(-5_000));
     }
 
-    logger.info(
-      { newMessages: results.length },
-      'Email poll complete',
-    );
+    logger.info({ newMessages: results.length }, 'Email poll complete');
 
     return results;
   }

@@ -276,9 +276,15 @@ function buildContainerArgs(
   }
 
   // Pass Paperless-ngx credentials if configured
-  const paperlessSecrets = readEnvFile(['PAPERLESS_API_TOKEN', 'PAPERLESS_API_URL']);
+  const paperlessSecrets = readEnvFile([
+    'PAPERLESS_API_TOKEN',
+    'PAPERLESS_API_URL',
+  ]);
   if (paperlessSecrets.PAPERLESS_API_TOKEN) {
-    args.push('-e', `PAPERLESS_API_TOKEN=${paperlessSecrets.PAPERLESS_API_TOKEN}`);
+    args.push(
+      '-e',
+      `PAPERLESS_API_TOKEN=${paperlessSecrets.PAPERLESS_API_TOKEN}`,
+    );
     args.push(
       '-e',
       `PAPERLESS_API_URL=${paperlessSecrets.PAPERLESS_API_URL || ''}`,

@@ -371,7 +371,9 @@ function setupBotHandlers(bot: Bot, opts: TelegramChannelOpts): void {
 
     const doc = ctx.message.document;
     const filename = doc?.file_name || 'file';
-    let content = caption ? `[Document: ${filename}] ${caption}` : `[Document: ${filename}]`;
+    let content = caption
+      ? `[Document: ${filename}] ${caption}`
+      : `[Document: ${filename}]`;
 
     try {
       const file = await ctx.api.getFile(doc!.file_id);
@@ -398,7 +400,10 @@ function setupBotHandlers(bot: Bot, opts: TelegramChannelOpts): void {
         'Telegram document downloaded and saved',
       );
     } catch (err) {
-      logger.error({ chatJid, filename, err }, 'Failed to download Telegram document');
+      logger.error(
+        { chatJid, filename, err },
+        'Failed to download Telegram document',
+      );
     }
 
     opts.onMessage(chatJid, {
