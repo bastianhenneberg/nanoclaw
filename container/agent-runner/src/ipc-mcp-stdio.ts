@@ -374,6 +374,76 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 );
 
 server.tool(
+  'upload_document',
+  'Upload a document file to Paperless-ngx for archival and OCR processing. Use this when emails contain document attachments (PDFs, scanned documents, invoices, contracts, receipts, letters). Do NOT upload non-document files like signatures, logos, or calendar invites.',
+  {
+    file_path: z.string().describe('Absolute container path to the document file (e.g. /workspace/group/attachments/email-123-invoice.pdf)'),
+    title: z.string().optional().describe('Document title. If omitted, Paperless uses the filename.'),
+    correspondent: z.string().optional().describe('Name of the sender/company (e.g. "Deutsche Telekom")'),
+    document_type: z.string().optional().describe('Document type (e.g. "Rechnung", "Vertrag", "Quittung", "Brief")'),
+    tags: z.array(z.string()).optional().describe('Tags to apply (e.g. ["Finanzen", "2026"])'),
+    created: z.string().optional().describe('Document date in YYYY-MM-DD format'),
+  },
+  async (args) => {
+    const apiUrl = process.env.PAPERLESS_API_URL;
+    const apiToken = process.env.PAPERLESS_API_TOKEN;
+
+    if (!apiUrl || !apiToken) {
+      return {
+        content: [{ type: 'text' as const, text: 'Paperless-ngx not configured (PAPERLESS_API_URL / PAPERLESS_API_TOKEN missing).' }],
+        isError: true,
+      };
+    }
+
+    if (!fs.existsSync(args.file_path)) {
+      return {
+        content: [{ type: 'text' as const, text: `File not found: ${args.file_path}` }],
+        isError: true,
+      };
+    }
+
+    try {
+      const fileBuffer = fs.readFileSync(args.file_path);
+      const fileName = path.basename(args.file_path);
+
+      const formData = new FormData();
+      formData.append('document', new Blob([fileBuffer]), fileName);
+      if (args.title) formData.append('title', args.title);
+      if (args.correspondent) formData.append('correspondent', args.correspondent);
+      if (args.document_type) formData.append('document_type', args.document_type);
+      if (args.tags) {
+        for (const tag of args.tags) formData.append('tags', tag);
+      }
+      if (args.created) formData.append('created', args.created);
+
+      const response = await fetch(`${apiUrl}/api/documents/post_document/`, {
+        method: 'POST',
+        headers: { 'Authorization': `Token ${apiToken}` },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        return {
+          content: [{ type: 'text' as const, text: `Paperless upload failed (${response.status}): ${body}` }],
+          isError: true,
+        };
+      }
+
+      const result = await response.json();
+      return {
+        content: [{ type: 'text' as const, text: `Document uploaded to Paperless-ngx. Task ID: ${result}` }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `Upload error: ${err instanceof Error ? err.message : String(err)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
   'resolve_host_path',
   'Resolve a container-local file path to its absolute host filesystem path. Use this when passing file paths to external MCP servers (e.g. ai-brain screenshot_path) that run on the host and need the real filesystem path.',
   {

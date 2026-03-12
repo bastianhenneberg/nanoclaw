@@ -201,6 +201,10 @@ class EmailChannel implements Channel {
       const lock = await client.getMailboxLock(EMAIL_IMAP_MAILBOX);
       try {
         const messages = await this.fetchUnseen(client);
+        logger.info(
+          { mailbox: EMAIL_IMAP_MAILBOX, newMessages: messages.length },
+          'Email poll complete',
+        );
         for (const msg of messages) {
           await this.handleIncomingEmail(msg);
         }
@@ -221,17 +225,28 @@ class EmailChannel implements Channel {
   private async fetchUnseen(client: ImapFlow): Promise<ParsedEmail[]> {
     const results: ParsedEmail[] = [];
 
+    // Phase 1: Collect metadata from FETCH — no other IMAP commands allowed
+    // during iteration (ImapFlow deadlocks on nested commands).
+    interface PendingMessage {
+      uid: string;
+      senderAddress: string;
+      envelope: any;
+      bodyStructure: any;
+      textParts: string[];
+      attachmentParts: MimePart[];
+    }
+    const pending: PendingMessage[] = [];
+    const disallowedUids: string[] = [];
+
     for await (const msg of client.fetch('1:*', {
       uid: true,
       envelope: true,
       bodyStructure: true,
       flags: true,
     })) {
-      // Skip already-seen UIDs (in-memory dedup across polls)
       const uid = String(msg.uid);
       if (this.seenUids.has(uid)) continue;
 
-      // Only process unseen messages
       if (msg.flags?.has('\\Seen')) {
         this.seenUids.add(uid);
         continue;
@@ -244,29 +259,35 @@ class EmailChannel implements Channel {
       if (!senderAddress) continue;
 
       if (!isSenderAllowed(senderAddress)) {
-        logger.debug(
-          { sender: senderAddress },
-          'Email from disallowed sender, skipping',
-        );
         this.seenUids.add(uid);
-        if (EMAIL_MARK_SEEN) {
-          await client.messageFlagsAdd(String(msg.uid), ['\\Seen'], {
-            uid: true,
-          });
-        }
+        disallowedUids.push(uid);
         continue;
       }
 
-      // Walk MIME structure to find text body and attachment parts
       const textParts: string[] = [];
       const attachmentParts: MimePart[] = [];
       walkBodyStructure(msg.bodyStructure, textParts, attachmentParts);
 
-      // Download plain-text body
-      let body = '';
-      for (const partNum of textParts) {
+      pending.push({ uid, senderAddress, envelope, bodyStructure: msg.bodyStructure, textParts, attachmentParts });
+    }
+
+    // Phase 2: Mark disallowed messages as seen (after fetch loop)
+    if (EMAIL_MARK_SEEN && disallowedUids.length > 0) {
+      for (const uid of disallowedUids) {
         try {
-          const dl = await client.download(uid, partNum, { uid: true });
+          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    // Phase 3: Download bodies and attachments for allowed messages
+    for (const msg of pending) {
+      let body = '';
+      for (const partNum of msg.textParts) {
+        try {
+          const dl = await client.download(msg.uid, partNum, { uid: true });
           if (dl?.content) {
             const chunks: Buffer[] = [];
             for await (const chunk of dl.content) {
@@ -275,25 +296,27 @@ class EmailChannel implements Channel {
             body += Buffer.concat(chunks).toString('utf-8');
           }
         } catch (err) {
-          logger.debug({ uid, partNum, err }, 'Failed to download text part');
+          logger.debug({ uid: msg.uid, partNum, err }, 'Failed to download text part');
         }
       }
       body = body.slice(0, EMAIL_MAX_BODY_CHARS).trim();
 
-      // Download attachments and save to a per-message temp directory
+      // Download attachments
       const attachments: EmailAttachment[] = [];
-      if (attachmentParts.length > 0) {
+      if (msg.attachmentParts.length > 0) {
         const tmpDir = path.join(
           os.tmpdir(),
-          `nanoclaw-email-${uid}-${Date.now()}`,
+          `nanoclaw-email-${msg.uid}-${Date.now()}`,
         );
         fs.mkdirSync(tmpDir, { recursive: true });
 
-        for (const part of attachmentParts) {
-          const safeName = sanitizeFilename(part.filename || `attachment-${part.partNum}`);
+        for (const part of msg.attachmentParts) {
+          const safeName = sanitizeFilename(
+            part.filename || `attachment-${part.partNum}`,
+          );
           const filePath = path.join(tmpDir, safeName);
           try {
-            const dl = await client.download(uid, part.partNum, { uid: true });
+            const dl = await client.download(msg.uid, part.partNum, { uid: true });
             if (dl?.content) {
               await pipeline(dl.content, createWriteStream(filePath));
               const sizeBytes = fs.statSync(filePath).size;
@@ -303,24 +326,23 @@ class EmailChannel implements Channel {
                 tempPath: filePath,
                 sizeBytes,
               });
-              logger.debug(
-                { uid, filename: safeName, sizeBytes },
-                'Email attachment saved',
-              );
             }
           } catch (err) {
-            logger.warn({ uid, filename: safeName, err }, 'Failed to download attachment');
+            logger.warn(
+              { uid: msg.uid, filename: safeName, err },
+              'Failed to download attachment',
+            );
           }
         }
       }
 
-      const subject = envelope.subject ?? '(no subject)';
-      const messageId = envelope.messageId ?? '';
-      const dateStr = envelope.date?.toISOString() ?? new Date().toISOString();
+      const subject = msg.envelope.subject ?? '(no subject)';
+      const messageId = msg.envelope.messageId ?? '';
+      const dateStr = msg.envelope.date?.toISOString() ?? new Date().toISOString();
 
       results.push({
-        uid,
-        senderAddress,
+        uid: msg.uid,
+        senderAddress: msg.senderAddress,
         subject,
         messageId,
         dateStr,
@@ -328,25 +350,36 @@ class EmailChannel implements Channel {
         attachments,
       });
 
-      this.seenUids.add(uid);
+      this.seenUids.add(msg.uid);
       if (EMAIL_MARK_SEEN) {
-        await client.messageFlagsAdd(String(msg.uid), ['\\Seen'], {
-          uid: true,
-        });
-      }
-
-      // Trim seen set to avoid unbounded growth
-      if (this.seenUids.size > 10_000) {
-        const entries = [...this.seenUids];
-        this.seenUids = new Set(entries.slice(-5_000));
+        await client.messageFlagsAdd(msg.uid, ['\\Seen'], { uid: true });
       }
     }
+
+    // Trim seen set to avoid unbounded growth
+    if (this.seenUids.size > 10_000) {
+      const entries = [...this.seenUids];
+      this.seenUids = new Set(entries.slice(-5_000));
+    }
+
+    logger.info(
+      { newMessages: results.length },
+      'Email poll complete',
+    );
 
     return results;
   }
 
   private async handleIncomingEmail(email: ParsedEmail): Promise<void> {
-    const { senderAddress, subject, messageId, dateStr, body, uid, attachments } = email;
+    const {
+      senderAddress,
+      subject,
+      messageId,
+      dateStr,
+      body,
+      uid,
+      attachments,
+    } = email;
     const chatJid = emailToJid(senderAddress);
 
     // Track reply-threading state
@@ -377,7 +410,9 @@ class EmailChannel implements Channel {
       for (const att of attachments) {
         // Container path will be rewritten by index.ts after routing.
         // Use a placeholder that index.ts replaces with the actual container path.
-        lines.push(`[ATTACHMENT name="${att.filename}" type="${att.mimeType}" size="${att.sizeBytes}" tempPath="${att.tempPath}"]`);
+        lines.push(
+          `[ATTACHMENT name="${att.filename}" type="${att.mimeType}" size="${att.sizeBytes}" tempPath="${att.tempPath}"]`,
+        );
       }
     }
 
@@ -396,7 +431,12 @@ class EmailChannel implements Channel {
     };
 
     logger.info(
-      { from: senderAddress, subject, uid, attachmentCount: attachments.length },
+      {
+        from: senderAddress,
+        subject,
+        uid,
+        attachmentCount: attachments.length,
+      },
       'Incoming email received',
     );
 

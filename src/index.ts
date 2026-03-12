@@ -582,7 +582,10 @@ async function main(): Promise<void> {
                 'Email attachment copied to group folder',
               );
             } catch (err) {
-              logger.warn({ err, src: att.tempPath }, 'Failed to copy email attachment');
+              logger.warn(
+                { err, src: att.tempPath },
+                'Failed to copy email attachment',
+              );
             }
           }
           msg = { ...msg, content: updatedContent };

@@ -352,9 +352,64 @@ function setupBotHandlers(bot: Bot, opts: TelegramChannelOpts): void {
   bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
   bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
   bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
-  bot.on('message:document', (ctx) => {
-    const name = ctx.message.document?.file_name || 'file';
-    storeNonText(ctx, `[Document: ${name}]`);
+  bot.on('message:document', async (ctx) => {
+    if (!dedup(ctx.message.message_id.toString())) return;
+    const chatJid = `tg:${ctx.chat.id}`;
+    const group = opts.registeredGroups()[chatJid];
+    if (!group) return;
+
+    const timestamp = new Date(ctx.message.date * 1000).toISOString();
+    const senderName =
+      ctx.from?.first_name ||
+      ctx.from?.username ||
+      ctx.from?.id?.toString() ||
+      'Unknown';
+    const caption = ctx.message.caption || '';
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+    jidBotMap.set(chatJid, ctx.api);
+
+    const doc = ctx.message.document;
+    const filename = doc?.file_name || 'file';
+    let content = caption ? `[Document: ${filename}] ${caption}` : `[Document: ${filename}]`;
+
+    try {
+      const file = await ctx.api.getFile(doc!.file_id);
+      const url = `https://api.telegram.org/file/bot${bot.token}/${file.file_path}`;
+      const resp = await fetch(url);
+      const buffer = Buffer.from(await resp.arrayBuffer());
+
+      const groupDir = resolveGroupFolderPath(group.folder);
+      const attDir = path.join(groupDir, 'attachments');
+      fs.mkdirSync(attDir, { recursive: true });
+
+      const safeName = `tg-${Date.now()}-${filename.replace(/[/\\:*?"<>|]/g, '_')}`;
+      const filePath = path.join(attDir, safeName);
+      fs.writeFileSync(filePath, buffer);
+
+      const containerPath = `/workspace/group/attachments/${safeName}`;
+      const sizeKB = Math.round(buffer.length / 1024);
+      const mimeType = doc?.mime_type || 'application/octet-stream';
+      content = `Document received: ${filename} (${sizeKB} KB, ${mimeType})\n[ATTACHMENT name="${filename}" type="${mimeType}" size="${buffer.length}" path="${containerPath}"]`;
+      if (caption) content += `\nCaption: ${caption}`;
+
+      logger.info(
+        { chatJid, filename: safeName, sizeKB },
+        'Telegram document downloaded and saved',
+      );
+    } catch (err) {
+      logger.error({ chatJid, filename, err }, 'Failed to download Telegram document');
+    }
+
+    opts.onMessage(chatJid, {
+      id: ctx.message.message_id.toString(),
+      chat_jid: chatJid,
+      sender: ctx.from?.id?.toString() || '',
+      sender_name: senderName,
+      content,
+      timestamp,
+      is_from_me: false,
+    });
   });
   bot.on('message:sticker', (ctx) => {
     const emoji = ctx.message.sticker?.emoji || '';

@@ -275,6 +275,16 @@ function buildContainerArgs(
     args.push('-e', `AI_BRAIN_TOKEN=${brainSecrets.AI_BRAIN_TOKEN}`);
   }
 
+  // Pass Paperless-ngx credentials if configured
+  const paperlessSecrets = readEnvFile(['PAPERLESS_API_TOKEN', 'PAPERLESS_API_URL']);
+  if (paperlessSecrets.PAPERLESS_API_TOKEN) {
+    args.push('-e', `PAPERLESS_API_TOKEN=${paperlessSecrets.PAPERLESS_API_TOKEN}`);
+    args.push(
+      '-e',
+      `PAPERLESS_API_URL=${paperlessSecrets.PAPERLESS_API_URL || ''}`,
+    );
+  }
+
   // Pass host groups directory so agents can resolve container paths to host paths
   // (used for passing screenshot paths to external MCP servers like ai-brain)
   args.push('-e', `NANOCLAW_HOST_GROUPS_DIR=${GROUPS_DIR}`);

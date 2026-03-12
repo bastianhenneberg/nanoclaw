@@ -81,9 +81,7 @@ export function readMemoryContext(groupFolder: string): string {
       .slice(-MAX_DAILY_FILES);
 
     for (const file of dailyFiles) {
-      const content = fs
-        .readFileSync(path.join(memDir, file), 'utf-8')
-        .trim();
+      const content = fs.readFileSync(path.join(memDir, file), 'utf-8').trim();
       if (content) {
         parts.push(content);
       }
