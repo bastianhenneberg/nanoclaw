@@ -4,6 +4,8 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  EMAIL_GROUP_JID,
+  GROUPS_DIR,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
   TELEGRAM_BOT_POOL,
@@ -12,6 +14,7 @@ import {
   WEBHOOK_BIND_HOST,
   WEBHOOK_PORT,
 } from './config.js';
+import { injectMemoryIntoPrompt, scheduleMemoryFlush } from './memory.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
@@ -322,11 +325,14 @@ async function runAgent(
       }
     : undefined;
 
+  // Inject persistent memory context as a preamble to the prompt
+  const promptWithMemory = injectMemoryIntoPrompt(prompt, group.folder);
+
   try {
     const output = await runContainerAgent(
       group,
       {
-        prompt,
+        prompt: promptWithMemory,
         sessionId,
         groupFolder: group.folder,
         chatJid,
@@ -350,6 +356,12 @@ async function runAgent(
         'Container agent error',
       );
       return 'error';
+    }
+
+    // After a successful session, distill memorable facts into memory storage.
+    // Runs fire-and-forget so it never blocks the response.
+    if (output.result) {
+      scheduleMemoryFlush(group.folder, prompt, output.result);
     }
 
     return 'success';
@@ -513,6 +525,23 @@ async function main(): Promise<void> {
   // Channel callbacks (shared by all channels)
   const channelOpts = {
     onMessage: (chatJid: string, msg: NewMessage) => {
+      // Email wildcard routing: if an email arrives for a sender that has no
+      // dedicated registered group, reroute to EMAIL_GROUP_JID so a single
+      // group can process all incoming emails.
+      if (
+        chatJid.startsWith('email:') &&
+        !registeredGroups[chatJid] &&
+        EMAIL_GROUP_JID &&
+        registeredGroups[EMAIL_GROUP_JID]
+      ) {
+        logger.debug(
+          { from: chatJid, to: EMAIL_GROUP_JID },
+          'Email wildcard routing: rerouting to default email group',
+        );
+        msg = { ...msg, chat_jid: EMAIL_GROUP_JID };
+        chatJid = EMAIL_GROUP_JID;
+      }
+
       // Sender allowlist drop mode: discard messages from denied senders before storing
       if (!msg.is_from_me && !msg.is_bot_message && registeredGroups[chatJid]) {
         const cfg = loadSenderAllowlist();
@@ -529,6 +558,40 @@ async function main(): Promise<void> {
           return;
         }
       }
+      // Email attachment handling: copy temp files into the target group folder
+      // so the agent container can access them at /workspace/group/attachments/
+      if (msg.emailAttachments && msg.emailAttachments.length > 0) {
+        const groupFolder = registeredGroups[chatJid]?.folder;
+        if (groupFolder) {
+          const attDir = path.join(GROUPS_DIR, groupFolder, 'attachments');
+          fs.mkdirSync(attDir, { recursive: true });
+
+          let updatedContent = msg.content;
+          for (const att of msg.emailAttachments) {
+            const destFilename = `email-${Date.now()}-${att.filename}`;
+            const destPath = path.join(attDir, destFilename);
+            try {
+              fs.copyFileSync(att.tempPath, destPath);
+              // Rewrite placeholder with the container-accessible path
+              updatedContent = updatedContent.replace(
+                `tempPath="${att.tempPath}"`,
+                `path="/workspace/group/attachments/${destFilename}"`,
+              );
+              logger.info(
+                { groupFolder, filename: destFilename },
+                'Email attachment copied to group folder',
+              );
+            } catch (err) {
+              logger.warn(
+                { err, src: att.tempPath },
+                'Failed to copy email attachment',
+              );
+            }
+          }
+          msg = { ...msg, content: updatedContent };
+        }
+      }
+
       storeMessage(msg);
     },
     onChatMetadata: (

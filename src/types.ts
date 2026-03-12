@@ -43,6 +43,14 @@ export interface RegisteredGroup {
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
 }
 
+export interface EmailAttachment {
+  filename: string;
+  mimeType: string;
+  /** Absolute path to the file saved on the host filesystem (temp location). */
+  tempPath: string;
+  sizeBytes: number;
+}
+
 export interface NewMessage {
   id: string;
   chat_jid: string;
@@ -52,6 +60,8 @@ export interface NewMessage {
   timestamp: string;
   is_from_me?: boolean;
   is_bot_message?: boolean;
+  /** Email attachments — present only for messages from the email channel. */
+  emailAttachments?: EmailAttachment[];
 }
 
 export interface ScheduledTask {

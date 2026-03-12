@@ -14,6 +14,26 @@ const envConfig = readEnvFile([
   'OLLAMA_HOST',
   'OLLAMA_MODEL',
   'WEBHOOK_LLM_PROVIDER',
+  'MEMORY_ENABLED',
+  'EMAIL_ENABLED',
+  'EMAIL_IMAP_HOST',
+  'EMAIL_IMAP_PORT',
+  'EMAIL_IMAP_MAILBOX',
+  'EMAIL_IMAP_USE_SSL',
+  'EMAIL_SMTP_HOST',
+  'EMAIL_SMTP_PORT',
+  'EMAIL_SMTP_USE_TLS',
+  'EMAIL_SMTP_USE_SSL',
+  'EMAIL_ADDRESS',
+  'EMAIL_PASSWORD',
+  'EMAIL_FROM_ADDRESS',
+  'EMAIL_POLL_INTERVAL',
+  'EMAIL_ALLOWED_SENDERS',
+  'EMAIL_AUTO_REPLY',
+  'EMAIL_MARK_SEEN',
+  'EMAIL_MAX_BODY_CHARS',
+  'EMAIL_SUBJECT_PREFIX',
+  'EMAIL_GROUP_JID',
 ]);
 
 export const ASSISTANT_NAME =
@@ -98,6 +118,91 @@ export const OLLAMA_HOST =
   process.env.OLLAMA_HOST || envConfig.OLLAMA_HOST || 'http://localhost:11434';
 export const OLLAMA_MODEL =
   process.env.OLLAMA_MODEL || envConfig.OLLAMA_MODEL || 'llama3.2';
+
+// Persistent memory system
+// When enabled, key facts from each session are distilled and stored as
+// Markdown files under groups/{folder}/memory/. Context is injected into
+// subsequent sessions so the agent remembers past conversations.
+export const MEMORY_ENABLED =
+  (process.env.MEMORY_ENABLED ?? envConfig.MEMORY_ENABLED ?? 'true') !==
+  'false';
+
+// ─── Email channel configuration ──────────────────────────────────────────
+// Set EMAIL_ENABLED=true and configure IMAP/SMTP to activate email support.
+// Each sender email address becomes an isolated "chat" (JID: email:<address>).
+// The group for incoming emails must be registered with folder "email_<address>"
+// or the main group can handle all email by mapping email:* to its chat_jid.
+
+export const EMAIL_ENABLED =
+  (process.env.EMAIL_ENABLED ?? envConfig.EMAIL_ENABLED ?? 'false') === 'true';
+
+export const EMAIL_IMAP_HOST =
+  process.env.EMAIL_IMAP_HOST || envConfig.EMAIL_IMAP_HOST || '';
+export const EMAIL_IMAP_PORT = parseInt(
+  process.env.EMAIL_IMAP_PORT || envConfig.EMAIL_IMAP_PORT || '993',
+  10,
+);
+export const EMAIL_IMAP_MAILBOX =
+  process.env.EMAIL_IMAP_MAILBOX || envConfig.EMAIL_IMAP_MAILBOX || 'INBOX';
+export const EMAIL_IMAP_USE_SSL =
+  (process.env.EMAIL_IMAP_USE_SSL ?? envConfig.EMAIL_IMAP_USE_SSL ?? 'true') !==
+  'false';
+
+export const EMAIL_SMTP_HOST =
+  process.env.EMAIL_SMTP_HOST || envConfig.EMAIL_SMTP_HOST || '';
+export const EMAIL_SMTP_PORT = parseInt(
+  process.env.EMAIL_SMTP_PORT || envConfig.EMAIL_SMTP_PORT || '587',
+  10,
+);
+export const EMAIL_SMTP_USE_TLS =
+  (process.env.EMAIL_SMTP_USE_TLS ?? envConfig.EMAIL_SMTP_USE_TLS ?? 'true') !==
+  'false';
+export const EMAIL_SMTP_USE_SSL =
+  (process.env.EMAIL_SMTP_USE_SSL ??
+    envConfig.EMAIL_SMTP_USE_SSL ??
+    'false') === 'true';
+
+export const EMAIL_ADDRESS =
+  process.env.EMAIL_ADDRESS || envConfig.EMAIL_ADDRESS || '';
+export const EMAIL_PASSWORD =
+  process.env.EMAIL_PASSWORD || envConfig.EMAIL_PASSWORD || '';
+export const EMAIL_FROM_ADDRESS =
+  process.env.EMAIL_FROM_ADDRESS || envConfig.EMAIL_FROM_ADDRESS || '';
+
+export const EMAIL_POLL_INTERVAL = Math.max(
+  5,
+  parseInt(
+    process.env.EMAIL_POLL_INTERVAL || envConfig.EMAIL_POLL_INTERVAL || '30',
+    10,
+  ),
+);
+export const EMAIL_ALLOWED_SENDERS = (
+  process.env.EMAIL_ALLOWED_SENDERS ||
+  envConfig.EMAIL_ALLOWED_SENDERS ||
+  '*'
+)
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+export const EMAIL_AUTO_REPLY =
+  (process.env.EMAIL_AUTO_REPLY ?? envConfig.EMAIL_AUTO_REPLY ?? 'true') !==
+  'false';
+export const EMAIL_MARK_SEEN =
+  (process.env.EMAIL_MARK_SEEN ?? envConfig.EMAIL_MARK_SEEN ?? 'true') !==
+  'false';
+export const EMAIL_MAX_BODY_CHARS = parseInt(
+  process.env.EMAIL_MAX_BODY_CHARS || envConfig.EMAIL_MAX_BODY_CHARS || '12000',
+  10,
+);
+export const EMAIL_SUBJECT_PREFIX =
+  process.env.EMAIL_SUBJECT_PREFIX || envConfig.EMAIL_SUBJECT_PREFIX || 'Re: ';
+
+// Wildcard email routing: chat_jid of the registered group that should receive
+// all incoming emails that have no dedicated per-sender group registered.
+// Example: EMAIL_GROUP_JID=tg:-1234567890  (your Telegram group JID)
+export const EMAIL_GROUP_JID =
+  process.env.EMAIL_GROUP_JID || envConfig.EMAIL_GROUP_JID || '';
 
 export const TELEGRAM_BOT_POOL = (
   process.env.TELEGRAM_BOT_POOL ||
