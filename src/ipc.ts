@@ -10,6 +10,7 @@ import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
+import { sendEmail } from './email-sender.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
@@ -297,6 +298,13 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For send_email
+    to?: string | string[];
+    subject?: string;
+    body?: string;
+    from?: string;
+    html?: string;
+    replyTo?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -571,6 +579,32 @@ export async function processTaskIpc(
         logger.warn(
           { data },
           'Invalid register_group request - missing required fields',
+        );
+      }
+      break;
+
+    case 'send_email':
+      // Send email via SMTP
+      if (data.to && data.subject && data.body) {
+        const to = Array.isArray(data.to) ? data.to : [data.to];
+        const success = await sendEmail({
+          to,
+          subject: data.subject as string,
+          body: data.body as string,
+          from: data.from as string | undefined,
+          html: data.html as string | undefined,
+          replyTo: data.replyTo as string | undefined,
+        });
+        if (success) {
+          logger.info(
+            { sourceGroup, to, subject: data.subject },
+            'Email sent via IPC',
+          );
+        }
+      } else {
+        logger.warn(
+          { data },
+          'Invalid send_email request - missing to, subject, or body',
         );
       }
       break;
