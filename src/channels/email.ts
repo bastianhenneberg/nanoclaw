@@ -338,6 +338,7 @@ class EmailChannel implements Channel {
       envelope: any;
       bodyStructure: any;
       textParts: string[];
+      htmlParts: string[];
       attachmentParts: MimePart[];
     }
 
@@ -372,13 +373,15 @@ class EmailChannel implements Channel {
 
       const textParts: string[] = [];
       const attachmentParts: MimePart[] = [];
-      walkBodyStructure(msg.bodyStructure, textParts, attachmentParts);
+      const htmlParts: string[] = [];
+      walkBodyStructure(msg.bodyStructure, textParts, attachmentParts, htmlParts);
       pending.push({
         uid,
         senderAddress,
         envelope,
         bodyStructure: msg.bodyStructure,
         textParts,
+        htmlParts,
         attachmentParts,
       });
     }
@@ -395,6 +398,7 @@ class EmailChannel implements Channel {
 
     for (const msg of pending) {
       let body = '';
+      // Prefer text/plain parts
       for (const partNum of msg.textParts) {
         try {
           const dl = await client.download(msg.uid, partNum, { uid: true });
@@ -410,6 +414,26 @@ class EmailChannel implements Channel {
             { uid: msg.uid, partNum, err },
             'Failed to download text part',
           );
+        }
+      }
+      // Fallback to text/html if no plain text found
+      if (!body && msg.htmlParts.length > 0) {
+        for (const partNum of msg.htmlParts) {
+          try {
+            const dl = await client.download(msg.uid, partNum, { uid: true });
+            if (dl?.content) {
+              const chunks: Buffer[] = [];
+              for await (const chunk of dl.content) {
+                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+              }
+              body += htmlToPlainText(Buffer.concat(chunks).toString('utf-8'));
+            }
+          } catch (err) {
+            logger.debug(
+              { uid: msg.uid, partNum, err },
+              'Failed to download HTML part',
+            );
+          }
         }
       }
       body = body.slice(0, this.cfg.maxBodyChars).trim();
@@ -510,6 +534,8 @@ class EmailChannel implements Channel {
       `Subject: ${subject}`,
       `Date: ${dateStr}`,
       `Message-ID: ${messageId}`,
+      `IMAP-UID: ${uid}`,
+      `IMAP-Folder: ${cfg.imapMailbox}`,
     ];
 
     if (attachments.length > 0) {
@@ -579,11 +605,12 @@ function walkBodyStructure(
   node: any,
   textParts: string[],
   attachmentParts: MimePart[],
+  htmlParts: string[] = [],
 ): void {
   if (!node) return;
   if (node.childNodes && Array.isArray(node.childNodes)) {
     for (const child of node.childNodes)
-      walkBodyStructure(child, textParts, attachmentParts);
+      walkBodyStructure(child, textParts, attachmentParts, htmlParts);
     return;
   }
 
@@ -595,6 +622,11 @@ function walkBodyStructure(
 
   if (type === 'text' && subtype === 'plain' && disposition !== 'attachment') {
     textParts.push(partNum);
+    return;
+  }
+
+  if (type === 'text' && subtype === 'html' && disposition !== 'attachment') {
+    htmlParts.push(partNum);
     return;
   }
 
@@ -610,6 +642,32 @@ function walkBodyStructure(
       `${partNum}.bin`;
     attachmentParts.push({ partNum, mimeType, filename });
   }
+}
+
+/** Strip HTML tags and decode common entities to produce readable plain text. */
+function htmlToPlainText(html: string): string {
+  return html
+    // Remove style/script blocks entirely
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    // Line breaks for block elements
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|tr|li|h[1-6])>/gi, '\n')
+    .replace(/<\/(td|th)>/gi, '\t')
+    // Strip remaining tags
+    .replace(/<[^>]+>/g, '')
+    // Decode common HTML entities
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#(\d+);/g, (_m, code) => String.fromCharCode(Number(code)))
+    // Collapse whitespace
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function sanitizeFilename(name: string): string {
@@ -696,7 +754,7 @@ export async function listEmails(params: ListEmailsParams): Promise<string> {
     for (const uid of recentUids) {
       const msgResult = await client.fetchOne(
         uid,
-        { envelope: true, flags: true },
+        { envelope: true, flags: true, bodyStructure: true },
         { uid: true },
       );
       if (!msgResult || typeof msgResult === 'boolean') continue;
@@ -709,9 +767,40 @@ export async function listEmails(params: ListEmailsParams): Promise<string> {
       const isUnread = !msgResult.flags?.has('\\Seen');
       const marker = isUnread ? '🔵' : '⚪';
 
+      // Extract body preview (text/plain preferred, text/html fallback)
+      let bodyPreview = '';
+      const textParts: string[] = [];
+      const htmlParts: string[] = [];
+      const attachParts: MimePart[] = [];
+      walkBodyStructure(msgResult.bodyStructure, textParts, attachParts, htmlParts);
+
+      const partsToTry = textParts.length > 0 ? textParts : htmlParts;
+      const isHtml = textParts.length === 0 && htmlParts.length > 0;
+      for (const partNum of partsToTry) {
+        try {
+          const dl = await client.download(String(uid), partNum, { uid: true });
+          if (dl?.content) {
+            const chunks: Buffer[] = [];
+            for await (const chunk of dl.content) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            bodyPreview += Buffer.concat(chunks).toString('utf-8');
+          }
+        } catch { /* skip */ }
+      }
+      if (isHtml && bodyPreview) {
+        bodyPreview = htmlToPlainText(bodyPreview);
+      }
+      // Truncate preview
+      bodyPreview = bodyPreview.slice(0, 500).trim();
+
       lines.push(`${marker} **${subject}**`);
       lines.push(`   From: ${from} | ${date}`);
+      lines.push(`   IMAP-UID: ${uid}`);
       lines.push(`   Message-ID: ${env.messageId || 'n/a'}`);
+      if (bodyPreview) {
+        lines.push(`   Preview: ${bodyPreview.replace(/\n/g, ' ').slice(0, 200)}`);
+      }
       lines.push('');
     }
 
@@ -824,30 +913,36 @@ export async function performEmailAction(
 
           if (params.archiveFolder) {
             // User specified a folder — check it exists
-            const match = mailboxes.find(mb => mb.path === params.archiveFolder);
+            const match = mailboxes.find(
+              (mb) => mb.path === params.archiveFolder,
+            );
             if (match) archiveFolder = match.path;
           }
 
           if (!archiveFolder) {
             // Look for year-specific archive subfolder (e.g. INBOX.Archives.2026)
-            const yearMatch = mailboxes.find(mb =>
-              mb.path.toLowerCase().includes('archiv') && mb.path.includes(year),
+            const yearMatch = mailboxes.find(
+              (mb) =>
+                mb.path.toLowerCase().includes('archiv') &&
+                mb.path.includes(year),
             );
             if (yearMatch) archiveFolder = yearMatch.path;
           }
 
           if (!archiveFolder) {
             // Look for any folder with \Archive special use flag
-            const specialUse = mailboxes.find(mb =>
-              mb.specialUse === '\\Archive',
+            const specialUse = mailboxes.find(
+              (mb) => mb.specialUse === '\\Archive',
             );
             if (specialUse) archiveFolder = specialUse.path;
           }
 
           if (!archiveFolder) {
             // Look for any folder with "archiv" in the name (case insensitive)
-            const archivMatch = mailboxes.find(mb =>
-              mb.path.toLowerCase().includes('archiv') && !mb.path.includes(year),
+            const archivMatch = mailboxes.find(
+              (mb) =>
+                mb.path.toLowerCase().includes('archiv') &&
+                !mb.path.includes(year),
             );
             if (archivMatch) archiveFolder = archivMatch.path;
           }
@@ -869,7 +964,12 @@ export async function performEmailAction(
             );
           } catch (moveErr) {
             logger.warn(
-              { messageId: params.messageId, account: params.account, folder: archiveFolder, err: moveErr },
+              {
+                messageId: params.messageId,
+                account: params.account,
+                folder: archiveFolder,
+                err: moveErr,
+              },
               'Archive move failed',
             );
           }

@@ -26,7 +26,8 @@ function findAccount(accountAddress?: string): EmailAccountConfig | null {
 
   if (accountAddress) {
     const match = accounts.find(
-      (a) => a.address.toLowerCase() === accountAddress.toLowerCase() && a.smtpHost,
+      (a) =>
+        a.address.toLowerCase() === accountAddress.toLowerCase() && a.smtpHost,
     );
     if (match) return match;
   }
@@ -93,10 +94,16 @@ export async function sendEmail(options: SendEmailOptions): Promise<boolean> {
       replyTo: options.replyTo,
     });
 
-    logger.info({ to, subject: options.subject, account: cfg.address }, 'Email sent via IPC');
+    logger.info(
+      { to, subject: options.subject, account: cfg.address },
+      'Email sent via IPC',
+    );
     return true;
   } catch (err) {
-    logger.error({ err, to, subject: options.subject, account: cfg.address }, 'Failed to send email');
+    logger.error(
+      { err, to, subject: options.subject, account: cfg.address },
+      'Failed to send email',
+    );
     return false;
   }
 }
