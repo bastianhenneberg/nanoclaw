@@ -38,6 +38,10 @@ import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
 import { WEBHOOK_SECRET } from './config.js';
 import { callLlm, LlmProvider } from './llm-provider.js';
 import { logger } from './logger.js';
+import {
+  handlePaperlessWebhook,
+  isPaperlessLexofficeEnabled,
+} from './paperless-lexoffice.js';
 import { NewMessage, RegisteredGroup } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -49,6 +53,8 @@ export interface WebhookDeps {
   onMessage: (chatJid: string, msg: NewMessage) => void;
   /** Current map of JID → RegisteredGroup (called on each request). */
   registeredGroups: () => Record<string, RegisteredGroup>;
+  /** Send a text message directly to a chat (no agent processing). */
+  sendNotification?: (jid: string, text: string) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +280,89 @@ async function handleLlmWebhook(
   }
 }
 
+/**
+ * Paperless-ngx → Lexoffice bridge route.
+ * Receives document_id, downloads PDF from Paperless, uploads to Lexoffice
+ * based on tag.
+ */
+async function handlePaperlessRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: WebhookDeps,
+): Promise<void> {
+  if (!isPaperlessLexofficeEnabled()) {
+    sendJson(res, 503, {
+      ok: false,
+      error: 'Paperless-Lexoffice bridge not configured',
+    });
+    return;
+  }
+
+  let payload: Record<string, unknown> = {};
+  try {
+    const body = await readBody(req);
+    const bodyStr = body.toString('utf-8');
+    logger.info(
+      { contentType: req.headers['content-type'], bodyLength: body.length, bodyPreview: bodyStr.slice(0, 500) },
+      'Paperless webhook: raw request',
+    );
+    if (body.length > 0) {
+      payload = JSON.parse(bodyStr) as Record<string, unknown>;
+    }
+  } catch (parseErr) {
+    logger.error({ parseErr }, 'Paperless webhook: failed to parse body');
+    sendJson(res, 400, { ok: false, error: 'Invalid JSON body' });
+    return;
+  }
+
+  try {
+    const result = await handlePaperlessWebhook(payload);
+    const status = result.ok ? 200 : 500;
+    sendJson(res, status, result);
+
+    // Send status message to lexware Telegram group
+    if (deps.sendNotification) {
+      const groups = deps.registeredGroups();
+      const lexwareGroup = findGroupByFolder(groups, 'lexware');
+      if (lexwareGroup) {
+        const [jid] = lexwareGroup;
+        let text: string;
+        if (result.ok && !result.skipped) {
+          text = `Lexoffice Upload: "${result.title}" -> ${result.account}`;
+        } else if (result.skipped) {
+          text = `Paperless Webhook: "${result.title}" übersprungen (kein Lexoffice-Tag)`;
+        } else {
+          text = `Lexoffice Upload fehlgeschlagen: ${result.error}`;
+        }
+        await deps.sendNotification(jid, text).catch((e) =>
+          logger.error({ err: e }, 'Failed to send Paperless notification'),
+        );
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, 'Paperless-Lexoffice webhook failed');
+    sendJson(res, 500, {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Internal error',
+    });
+
+    // Send error to lexware group
+    if (deps.sendNotification) {
+      const groups = deps.registeredGroups();
+      const lexwareGroup = findGroupByFolder(groups, 'lexware');
+      if (lexwareGroup) {
+        const [jid] = lexwareGroup;
+        await deps.sendNotification(
+          jid,
+          `Lexoffice Upload Fehler: ${err instanceof Error ? err.message : 'Unbekannter Fehler'}`,
+        ).catch((e) =>
+          logger.error({ err: e }, 'Failed to send Paperless error notification'),
+        );
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
@@ -319,6 +408,12 @@ export function startWebhookServer(
         }
 
         const url = req.url ?? '';
+
+        // POST /webhook/paperless — Paperless-ngx → Lexoffice bridge
+        if (url.match(/^\/webhook\/paperless\/?$/)) {
+          await handlePaperlessRoute(req, res, deps);
+          return;
+        }
 
         // POST /webhook/:groupFolder/llm — direct LLM mode
         const llmMatch = url.match(/^\/webhook\/([^/]+)\/llm\/?$/);

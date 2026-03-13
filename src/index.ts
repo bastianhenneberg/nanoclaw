@@ -52,7 +52,7 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { initBotPool } from './channels/telegram.js';
 import { startIpcWatcher } from './ipc.js';
-import { findChannel, formatMessages, formatOutbound } from './router.js';
+import { findChannel, formatMessages, formatOutbound, routeOutbound } from './router.js';
 import {
   isSenderAllowed,
   isTriggerAllowed,
@@ -609,6 +609,7 @@ async function main(): Promise<void> {
     webhookServer = await startWebhookServer(WEBHOOK_PORT, WEBHOOK_BIND_HOST, {
       onMessage: (chatJid, msg) => channelOpts.onMessage(chatJid, msg),
       registeredGroups: () => registeredGroups,
+      sendNotification: (jid, text) => routeOutbound(channels, jid, text),
     });
   }
 

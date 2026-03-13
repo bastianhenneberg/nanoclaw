@@ -79,6 +79,8 @@ check_ssh() {
 # === RUN CHECKS ===
 check_local
 check_ssh "bold-tokyo" "178.104.23.247" "forge"
+check_ssh "coolify-instanz" "188.245.53.38" "root"
+check_ssh "kiserver" "192.168.1.147" "bastian"
 
 # === REPORT ===
 if [ -n "$alerts" ]; then
@@ -117,5 +119,7 @@ check_website() {
     fi
 }
 
-# Websites auf bold-tokyo
+# Websites
 check_website "schuelerferienpass.de" "https://schülerferienpass.de"
+check_website "peppermint-digital.de" "https://peppermint-digital.de/"
+check_website "crewtex.de" "https://crewtex.de/"
