@@ -785,64 +785,115 @@ export async function performEmailAction(
     client = new ImapFlow(imapConfig);
     await client.connect();
 
-    // Find the email by Message-ID
-    await client.mailboxOpen(cfg.imapMailbox);
-    const searchResults = await client.search({
-      header: { 'message-id': params.messageId },
-    });
-
-    if (
-      !searchResults ||
-      !Array.isArray(searchResults) ||
-      searchResults.length === 0
-    ) {
-      logger.warn(
-        { messageId: params.messageId, account: params.account },
-        'Email not found',
+    // Find the email by Message-ID (use uid: true so results are UIDs)
+    const lock = await client.getMailboxLock(cfg.imapMailbox);
+    try {
+      const uids = await client.search(
+        { header: { 'message-id': params.messageId } },
+        { uid: true },
       );
-      await client.logout();
-      return false;
-    }
 
-    const uid = (searchResults as number[])[0];
-
-    switch (params.action) {
-      case 'delete':
-        await client.messageDelete(uid, { uid: true });
-        logger.info(
+      if (!uids || !Array.isArray(uids) || uids.length === 0) {
+        logger.warn(
           { messageId: params.messageId, account: params.account },
-          'Email deleted',
+          'Email not found',
         );
-        break;
+        return false;
+      }
 
-      case 'archive':
-        const archiveFolder = params.archiveFolder || 'Archive';
-        await client.messageMove(uid, archiveFolder, { uid: true });
-        logger.info(
-          {
-            messageId: params.messageId,
-            account: params.account,
-            folder: archiveFolder,
-          },
-          'Email archived',
-        );
-        break;
+      const uid = String(uids[0]);
 
-      case 'mark_read':
-        await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
-        logger.info(
-          { messageId: params.messageId, account: params.account },
-          'Email marked as read',
-        );
-        break;
+      switch (params.action) {
+        case 'delete':
+          // Flag as deleted + expunge (works on all IMAP servers)
+          await client.messageFlagsAdd(uid, ['\\Deleted'], { uid: true });
+          await client.messageDelete(uid, { uid: true });
+          logger.info(
+            { messageId: params.messageId, account: params.account },
+            'Email deleted',
+          );
+          break;
 
-      case 'mark_unread':
-        await client.messageFlagsRemove(uid, ['\\Seen'], { uid: true });
-        logger.info(
-          { messageId: params.messageId, account: params.account },
-          'Email marked as unread',
-        );
-        break;
+        case 'archive': {
+          // Find the actual archive folder on this server
+          const mailboxes = await client.list();
+          const year = new Date().getFullYear().toString();
+
+          // Priority: explicit param > year subfolder > any folder with "archiv" in name > \Archive special use
+          let archiveFolder: string | null = null;
+
+          if (params.archiveFolder) {
+            // User specified a folder — check it exists
+            const match = mailboxes.find(mb => mb.path === params.archiveFolder);
+            if (match) archiveFolder = match.path;
+          }
+
+          if (!archiveFolder) {
+            // Look for year-specific archive subfolder (e.g. INBOX.Archives.2026)
+            const yearMatch = mailboxes.find(mb =>
+              mb.path.toLowerCase().includes('archiv') && mb.path.includes(year),
+            );
+            if (yearMatch) archiveFolder = yearMatch.path;
+          }
+
+          if (!archiveFolder) {
+            // Look for any folder with \Archive special use flag
+            const specialUse = mailboxes.find(mb =>
+              mb.specialUse === '\\Archive',
+            );
+            if (specialUse) archiveFolder = specialUse.path;
+          }
+
+          if (!archiveFolder) {
+            // Look for any folder with "archiv" in the name (case insensitive)
+            const archivMatch = mailboxes.find(mb =>
+              mb.path.toLowerCase().includes('archiv') && !mb.path.includes(year),
+            );
+            if (archivMatch) archiveFolder = archivMatch.path;
+          }
+
+          if (!archiveFolder) {
+            // Last resort: try "Archive"
+            archiveFolder = 'Archive';
+          }
+
+          try {
+            await client.messageMove(uid, archiveFolder, { uid: true });
+            logger.info(
+              {
+                messageId: params.messageId,
+                account: params.account,
+                folder: archiveFolder,
+              },
+              'Email archived',
+            );
+          } catch (moveErr) {
+            logger.warn(
+              { messageId: params.messageId, account: params.account, folder: archiveFolder, err: moveErr },
+              'Archive move failed',
+            );
+          }
+          break;
+        }
+
+        case 'mark_read':
+          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+          logger.info(
+            { messageId: params.messageId, account: params.account },
+            'Email marked as read',
+          );
+          break;
+
+        case 'mark_unread':
+          await client.messageFlagsRemove(uid, ['\\Seen'], { uid: true });
+          logger.info(
+            { messageId: params.messageId, account: params.account },
+            'Email marked as unread',
+          );
+          break;
+      }
+    } finally {
+      lock.release();
     }
 
     await client.logout();

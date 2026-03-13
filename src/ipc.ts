@@ -603,6 +603,7 @@ export async function processTaskIpc(
           from: data.from as string | undefined,
           html: data.html as string | undefined,
           replyTo: data.replyTo as string | undefined,
+          account: data.account as string | undefined,
         });
         if (success) {
           logger.info(

@@ -1,45 +1,13 @@
 /**
  * Standalone email sender for IPC and other internal use.
- * Uses the same SMTP config as the email channel.
+ * Supports multi-account: picks the right SMTP config by account address.
+ * Falls back to the first account with SMTP configured.
  */
-import { createTransport, Transporter } from 'nodemailer';
+import { createTransport } from 'nodemailer';
 
-import {
-  EMAIL_ADDRESS,
-  EMAIL_FROM_ADDRESS,
-  EMAIL_PASSWORD,
-  EMAIL_SMTP_HOST,
-  EMAIL_SMTP_PORT,
-  EMAIL_SMTP_USE_SSL,
-  EMAIL_SMTP_USE_TLS,
-} from './config.js';
+import { parseEmailAccounts, EmailAccountConfig } from './email-accounts.js';
+import { MicrosoftTokenManager } from './oauth2.js';
 import { logger } from './logger.js';
-
-let transporter: Transporter | null = null;
-
-function getTransporter(): Transporter | null {
-  if (!EMAIL_SMTP_HOST || !EMAIL_ADDRESS || !EMAIL_PASSWORD) {
-    logger.warn('Email sender: SMTP not configured');
-    return null;
-  }
-
-  if (!transporter) {
-    transporter = createTransport({
-      host: EMAIL_SMTP_HOST,
-      port: EMAIL_SMTP_PORT,
-      secure: EMAIL_SMTP_USE_SSL,
-      auth: {
-        user: EMAIL_ADDRESS,
-        pass: EMAIL_PASSWORD,
-      },
-      ...(EMAIL_SMTP_USE_TLS && !EMAIL_SMTP_USE_SSL
-        ? { requireTLS: true }
-        : {}),
-    });
-  }
-
-  return transporter;
-}
 
 export interface SendEmailOptions {
   to: string | string[];
@@ -48,18 +16,74 @@ export interface SendEmailOptions {
   from?: string;
   html?: string;
   replyTo?: string;
+  /** Account address to send from. If omitted, uses first account with SMTP. */
+  account?: string;
+}
+
+function findAccount(accountAddress?: string): EmailAccountConfig | null {
+  const accounts = parseEmailAccounts();
+  if (accounts.length === 0) return null;
+
+  if (accountAddress) {
+    const match = accounts.find(
+      (a) => a.address.toLowerCase() === accountAddress.toLowerCase() && a.smtpHost,
+    );
+    if (match) return match;
+  }
+
+  // Fall back to first account with SMTP configured
+  return accounts.find((a) => a.smtpHost) || null;
+}
+
+async function buildTransportConfig(cfg: EmailAccountConfig): Promise<object> {
+  if (cfg.authType === 'oauth2') {
+    const tokenMgr = new MicrosoftTokenManager({
+      clientId: cfg.oauth2ClientId,
+      clientSecret: cfg.oauth2ClientSecret,
+      tenantId: cfg.oauth2TenantId,
+      grantType: cfg.oauth2GrantType,
+      refreshToken: cfg.oauth2RefreshToken || undefined,
+    });
+    const accessToken = await tokenMgr.getAccessToken();
+    return {
+      host: cfg.smtpHost,
+      port: cfg.smtpPort,
+      secure: cfg.smtpUseSSL,
+      auth: { type: 'OAuth2', user: cfg.address, accessToken },
+    };
+  }
+
+  if (cfg.smtpUseSSL) {
+    return {
+      host: cfg.smtpHost,
+      port: cfg.smtpPort,
+      secure: true,
+      auth: { user: cfg.address, pass: cfg.password },
+    };
+  }
+
+  return {
+    host: cfg.smtpHost,
+    port: cfg.smtpPort,
+    secure: false,
+    auth: { user: cfg.address, pass: cfg.password },
+    tls: { rejectUnauthorized: cfg.smtpUseTLS },
+  };
 }
 
 export async function sendEmail(options: SendEmailOptions): Promise<boolean> {
-  const transport = getTransporter();
-  if (!transport) {
+  const cfg = findAccount(options.account);
+  if (!cfg) {
+    logger.warn('Email sender: no account with SMTP configured');
     return false;
   }
 
-  const from = options.from || EMAIL_FROM_ADDRESS || EMAIL_ADDRESS;
+  const from = options.from || cfg.fromAddress || cfg.address;
   const to = Array.isArray(options.to) ? options.to.join(', ') : options.to;
 
   try {
+    const transportConfig = await buildTransportConfig(cfg);
+    const transport = createTransport(transportConfig);
     await transport.sendMail({
       from,
       to,
@@ -69,10 +93,10 @@ export async function sendEmail(options: SendEmailOptions): Promise<boolean> {
       replyTo: options.replyTo,
     });
 
-    logger.info({ to, subject: options.subject }, 'Email sent via IPC');
+    logger.info({ to, subject: options.subject, account: cfg.address }, 'Email sent via IPC');
     return true;
   } catch (err) {
-    logger.error({ err, to, subject: options.subject }, 'Failed to send email');
+    logger.error({ err, to, subject: options.subject, account: cfg.address }, 'Failed to send email');
     return false;
   }
 }
