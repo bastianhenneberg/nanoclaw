@@ -34,6 +34,12 @@ const envConfig = readEnvFile([
   'EMAIL_MAX_BODY_CHARS',
   'EMAIL_SUBJECT_PREFIX',
   'EMAIL_GROUP_JID',
+  'EMAIL_AUTH_TYPE',
+  'EMAIL_OAUTH2_CLIENT_ID',
+  'EMAIL_OAUTH2_CLIENT_SECRET',
+  'EMAIL_OAUTH2_TENANT_ID',
+  'EMAIL_OAUTH2_GRANT_TYPE',
+  'EMAIL_OAUTH2_REFRESH_TOKEN',
 ]);
 
 export const ASSISTANT_NAME =
@@ -203,6 +209,30 @@ export const EMAIL_SUBJECT_PREFIX =
 // Example: EMAIL_GROUP_JID=tg:-1234567890  (your Telegram group JID)
 export const EMAIL_GROUP_JID =
   process.env.EMAIL_GROUP_JID || envConfig.EMAIL_GROUP_JID || '';
+
+export const EMAIL_AUTH_TYPE = (process.env.EMAIL_AUTH_TYPE ??
+  envConfig.EMAIL_AUTH_TYPE ??
+  'password') as 'password' | 'oauth2';
+
+export const EMAIL_OAUTH2_CLIENT_ID =
+  process.env.EMAIL_OAUTH2_CLIENT_ID || envConfig.EMAIL_OAUTH2_CLIENT_ID || '';
+
+export const EMAIL_OAUTH2_CLIENT_SECRET =
+  process.env.EMAIL_OAUTH2_CLIENT_SECRET ||
+  envConfig.EMAIL_OAUTH2_CLIENT_SECRET ||
+  '';
+
+export const EMAIL_OAUTH2_TENANT_ID =
+  process.env.EMAIL_OAUTH2_TENANT_ID || envConfig.EMAIL_OAUTH2_TENANT_ID || '';
+
+export const EMAIL_OAUTH2_GRANT_TYPE = (process.env.EMAIL_OAUTH2_GRANT_TYPE ??
+  envConfig.EMAIL_OAUTH2_GRANT_TYPE ??
+  'client_credentials') as 'client_credentials' | 'refresh_token';
+
+export const EMAIL_OAUTH2_REFRESH_TOKEN =
+  process.env.EMAIL_OAUTH2_REFRESH_TOKEN ||
+  envConfig.EMAIL_OAUTH2_REFRESH_TOKEN ||
+  '';
 
 export const TELEGRAM_BOT_POOL = (
   process.env.TELEGRAM_BOT_POOL ||

@@ -1,23 +1,38 @@
 /**
- * Email channel for NanoClaw
+ * Email channel for NanoClaw — Multi-account edition
  *
- * Provides IMAP polling (inbound) + SMTP send (outbound), matching the same
- * Channel interface as the Telegram channel.
+ * Supports unlimited IMAP/SMTP accounts (password or OAuth2), each routed
+ * to its own Telegram group. Fully backward-compatible with the legacy
+ * single-account EMAIL_* env vars.
  *
- * Inspired by OpenClaw / NanoBot's email channel implementation.
- *
- * Configuration via environment variables (see config.ts EMAIL_* keys):
+ * ── Single account (legacy, unchanged) ────────────────────────────────────
  *   EMAIL_ENABLED=true
- *   EMAIL_IMAP_HOST=imap.gmail.com
- *   EMAIL_IMAP_PORT=993
- *   EMAIL_SMTP_HOST=smtp.gmail.com
- *   EMAIL_SMTP_PORT=587
  *   EMAIL_ADDRESS=you@example.com
  *   EMAIL_PASSWORD=app-password
- *   EMAIL_POLL_INTERVAL=30          (seconds, default 30)
- *   EMAIL_ALLOWED_SENDERS=*         (* = anyone, or comma-separated list)
- *   EMAIL_AUTO_REPLY=true           (default true)
- *   EMAIL_MARK_SEEN=true            (default true)
+ *   EMAIL_IMAP_HOST=imap.example.com
+ *   EMAIL_SMTP_HOST=smtp.example.com
+ *   EMAIL_GROUP_JID=tg:-1234567890
+ *
+ * ── Multiple accounts ──────────────────────────────────────────────────────
+ *   EMAIL_ACCOUNTS=3
+ *   EMAIL_1_ADDRESS=info@company.de
+ *   EMAIL_1_PASSWORD=secret
+ *   EMAIL_1_IMAP_HOST=imap.company.de
+ *   EMAIL_1_GROUP_JID=tg:-111111111
+ *
+ *   EMAIL_2_ADDRESS=user@office365.com
+ *   EMAIL_2_AUTH_TYPE=oauth2
+ *   EMAIL_2_OAUTH2_TENANT_ID=...
+ *   EMAIL_2_OAUTH2_CLIENT_ID=...
+ *   EMAIL_2_OAUTH2_CLIENT_SECRET=...
+ *   EMAIL_2_GROUP_JID=tg:-222222222
+ *
+ *   EMAIL_3_ADDRESS=noreply@other.de
+ *   EMAIL_3_PASSWORD=secret
+ *   EMAIL_3_IMAP_HOST=mail.other.de
+ *   EMAIL_3_GROUP_JID=tg:-333333333
+ *
+ * See src/email-accounts.ts for all available config keys.
  */
 import crypto from 'crypto';
 import fs from 'fs';
@@ -29,27 +44,9 @@ import { createTransport } from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 
 import { EmailAttachment } from '../types.js';
+import { MicrosoftTokenManager } from '../oauth2.js';
+import { EmailAccountConfig, parseEmailAccounts } from '../email-accounts.js';
 
-import {
-  EMAIL_ADDRESS,
-  EMAIL_ALLOWED_SENDERS,
-  EMAIL_AUTO_REPLY,
-  EMAIL_ENABLED,
-  EMAIL_IMAP_HOST,
-  EMAIL_IMAP_MAILBOX,
-  EMAIL_IMAP_PORT,
-  EMAIL_IMAP_USE_SSL,
-  EMAIL_MARK_SEEN,
-  EMAIL_MAX_BODY_CHARS,
-  EMAIL_PASSWORD,
-  EMAIL_POLL_INTERVAL,
-  EMAIL_SMTP_HOST,
-  EMAIL_SMTP_PORT,
-  EMAIL_SMTP_USE_SSL,
-  EMAIL_SMTP_USE_TLS,
-  EMAIL_FROM_ADDRESS,
-  EMAIL_SUBJECT_PREFIX,
-} from '../config.js';
 import { logger } from '../logger.js';
 import {
   Channel,
@@ -70,15 +67,19 @@ function jidToEmail(jid: string): string {
   return jid.replace(EMAIL_JID_PREFIX, '');
 }
 
-/** Check if a sender is allowed per the EMAIL_ALLOWED_SENDERS config. */
-function isSenderAllowed(senderEmail: string): boolean {
-  if (EMAIL_ALLOWED_SENDERS.includes('*')) return true;
-  if (EMAIL_ALLOWED_SENDERS.length === 0) return false;
-  return EMAIL_ALLOWED_SENDERS.includes(senderEmail.toLowerCase().trim());
+function isSenderAllowed(
+  senderEmail: string,
+  allowedSenders: string[],
+): boolean {
+  if (allowedSenders.includes('*')) return true;
+  if (allowedSenders.length === 0) return false;
+  return allowedSenders.includes(senderEmail.toLowerCase().trim());
 }
 
+// ── EmailChannel ─────────────────────────────────────────────────────────────
+
 class EmailChannel implements Channel {
-  readonly name = 'email';
+  readonly name: string;
 
   private running = false;
   private connected = false;
@@ -89,28 +90,63 @@ class EmailChannel implements Channel {
   private lastSubjectBySender = new Map<string, string>();
   private lastMessageIdBySender = new Map<string, string>();
 
+  // OAuth2 token manager (only created when authType=oauth2)
+  private tokenManager: MicrosoftTokenManager | null = null;
+
   constructor(
+    private readonly cfg: EmailAccountConfig,
     private readonly onMessage: OnInboundMessage,
     private readonly onChatMetadata: OnChatMetadata,
-  ) {}
+  ) {
+    this.name = `email:${cfg.address}`;
+
+    if (cfg.authType === 'oauth2') {
+      this.tokenManager = new MicrosoftTokenManager({
+        clientId: cfg.oauth2ClientId,
+        clientSecret: cfg.oauth2ClientSecret,
+        tenantId: cfg.oauth2TenantId,
+        grantType: cfg.oauth2GrantType,
+        refreshToken: cfg.oauth2RefreshToken || undefined,
+      });
+    }
+  }
 
   async connect(): Promise<void> {
-    if (!EMAIL_ENABLED) {
-      logger.info('Email channel disabled (EMAIL_ENABLED != true)');
-      return;
-    }
-    if (!EMAIL_IMAP_HOST || !EMAIL_ADDRESS || !EMAIL_PASSWORD) {
-      logger.warn(
-        'Email channel: missing required config (EMAIL_IMAP_HOST, EMAIL_ADDRESS, EMAIL_PASSWORD)',
-      );
-      return;
+    const { cfg } = this;
+
+    if (cfg.authType === 'oauth2') {
+      if (
+        !cfg.oauth2ClientId ||
+        !cfg.oauth2ClientSecret ||
+        !cfg.oauth2TenantId
+      ) {
+        logger.warn(
+          { account: cfg.address, index: cfg.index },
+          'Email account (OAuth2): missing CLIENT_ID, CLIENT_SECRET or TENANT_ID — skipping',
+        );
+        return;
+      }
+    } else {
+      if (!cfg.imapHost || !cfg.address || !cfg.password) {
+        logger.warn(
+          { account: cfg.address, index: cfg.index },
+          'Email account: missing IMAP_HOST, ADDRESS or PASSWORD — skipping',
+        );
+        return;
+      }
     }
 
     this.running = true;
     this.connected = true;
     logger.info(
-      { host: EMAIL_IMAP_HOST, port: EMAIL_IMAP_PORT, address: EMAIL_ADDRESS },
-      'Email channel started (IMAP polling)',
+      {
+        index: cfg.index,
+        address: cfg.address,
+        imapHost: cfg.imapHost,
+        authType: cfg.authType,
+        groupJid: cfg.groupJid || '(per-sender routing)',
+      },
+      'Email account started',
     );
     this.schedulePoll(0);
   }
@@ -120,6 +156,7 @@ class EmailChannel implements Channel {
   }
 
   ownsJid(jid: string): boolean {
+    // Only owns email:<sender> JIDs — Telegram groups are owned by telegram channel
     return jid.startsWith(EMAIL_JID_PREFIX);
   }
 
@@ -130,57 +167,72 @@ class EmailChannel implements Channel {
       clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
-    logger.info('Email channel stopped');
+    logger.info({ address: this.cfg.address }, 'Email account stopped');
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
-    if (!EMAIL_AUTO_REPLY) {
-      logger.debug({ jid }, 'Email auto-reply disabled, skipping outbound');
+    const { cfg } = this;
+
+    if (!cfg.autoReply) {
+      logger.debug({ jid }, 'Email auto-reply disabled');
       return;
     }
-    if (!EMAIL_SMTP_HOST) {
-      logger.warn('Email channel: SMTP not configured, cannot send reply');
+    if (!cfg.smtpHost) {
+      logger.warn(
+        { account: cfg.address },
+        'SMTP not configured, cannot send reply',
+      );
       return;
     }
 
-    const to = jidToEmail(jid);
+    // Determine recipient: if jid is groupJid, we can't reply without a sender
+    // In that case look up the last known sender for this group
+    let to = jid.startsWith(EMAIL_JID_PREFIX)
+      ? jidToEmail(jid)
+      : (this.lastSenderForGroup.get(jid) ?? '');
+
+    if (!to) {
+      logger.warn({ jid }, 'Cannot determine reply recipient');
+      return;
+    }
+
     const lastSubject =
       this.lastSubjectBySender.get(to) ?? 'Message from assistant';
     const inReplyTo = this.lastMessageIdBySender.get(to);
-
     const subject = lastSubject.toLowerCase().startsWith('re:')
       ? lastSubject
-      : `${EMAIL_SUBJECT_PREFIX}${lastSubject}`;
-
-    const from = EMAIL_FROM_ADDRESS || EMAIL_ADDRESS;
+      : `${cfg.subjectPrefix}${lastSubject}`;
+    const from = cfg.fromAddress || cfg.address;
 
     try {
-      const transport = createTransport(this.smtpConfig());
+      const smtpCfg = await this.buildSmtpConfig();
+      const transport = createTransport(smtpCfg);
       await transport.sendMail({
         from,
         to,
         subject,
         text,
-        ...(inReplyTo && {
-          inReplyTo,
-          references: inReplyTo,
-        }),
+        ...(inReplyTo && { inReplyTo, references: inReplyTo }),
       });
-      logger.info({ to, subject }, 'Email reply sent');
+      logger.info({ to, subject, account: cfg.address }, 'Email reply sent');
     } catch (err) {
-      logger.error({ to, err }, 'Failed to send email reply');
+      logger.error(
+        { to, err, account: cfg.address },
+        'Failed to send email reply',
+      );
     }
   }
 
-  // ─── private ──────────────────────────────────────────────────────────────
+  // ── Private ───────────────────────────────────────────────────────────────
+
+  /** groupJid → last sender email (for reply routing when jid is groupJid) */
+  private lastSenderForGroup = new Map<string, string>();
 
   private schedulePoll(delayMs: number): void {
     this.pollTimer = setTimeout(() => {
       if (!this.running) return;
       void this.poll().finally(() => {
-        if (this.running) {
-          this.schedulePoll(EMAIL_POLL_INTERVAL * 1000);
-        }
+        if (this.running) this.schedulePoll(this.cfg.pollInterval * 1000);
       });
     }, delayMs);
   }
@@ -188,45 +240,98 @@ class EmailChannel implements Channel {
   private async poll(): Promise<void> {
     let client: ImapFlow | null = null;
     try {
+      const auth = await this.buildImapAuth();
       client = new ImapFlow({
-        host: EMAIL_IMAP_HOST,
-        port: EMAIL_IMAP_PORT,
-        secure: EMAIL_IMAP_USE_SSL,
-        auth: { user: EMAIL_ADDRESS, pass: EMAIL_PASSWORD },
-        logger: false, // suppress imapflow's own verbose logging
+        host: this.cfg.imapHost,
+        port: this.cfg.imapPort,
+        secure: this.cfg.imapUseSSL,
+        auth,
+        logger: false,
       });
 
       await client.connect();
-
-      const lock = await client.getMailboxLock(EMAIL_IMAP_MAILBOX);
+      const lock = await client.getMailboxLock(this.cfg.imapMailbox);
       try {
         const messages = await this.fetchUnseen(client);
-        logger.info(
-          { mailbox: EMAIL_IMAP_MAILBOX, newMessages: messages.length },
-          'Email poll complete',
-        );
-        for (const msg of messages) {
-          await this.handleIncomingEmail(msg);
-        }
+        for (const msg of messages) await this.handleIncomingEmail(msg);
       } finally {
         lock.release();
       }
     } catch (err) {
-      logger.warn({ err }, 'Email poll error');
+      if (
+        this.tokenManager &&
+        err instanceof Error &&
+        (err.message.includes('Authentication failed') ||
+          err.message.includes('[AUTHENTICATIONFAILED]') ||
+          err.message.includes('401'))
+      ) {
+        logger.warn(
+          { account: this.cfg.address },
+          'OAuth2: token rejected, invalidating cache',
+        );
+        this.tokenManager.invalidate();
+      }
+      logger.warn({ err, account: this.cfg.address }, 'Email poll error');
     } finally {
       try {
         await client?.logout();
       } catch {
-        // ignore logout errors
+        /* ignore */
       }
     }
+  }
+
+  private async buildImapAuth(): Promise<{
+    user: string;
+    pass?: string;
+    accessToken?: string;
+  }> {
+    if (this.tokenManager) {
+      return {
+        user: this.cfg.address,
+        accessToken: await this.tokenManager.getAccessToken(),
+      };
+    }
+    return { user: this.cfg.address, pass: this.cfg.password };
+  }
+
+  private async buildSmtpConfig(): Promise<object> {
+    const { cfg } = this;
+
+    if (this.tokenManager) {
+      return {
+        host: cfg.smtpHost,
+        port: cfg.smtpPort,
+        secure: cfg.smtpUseSSL,
+        auth: {
+          type: 'OAuth2',
+          user: cfg.address,
+          accessToken: await this.tokenManager.getAccessToken(),
+        },
+      };
+    }
+
+    if (cfg.smtpUseSSL) {
+      return {
+        host: cfg.smtpHost,
+        port: cfg.smtpPort,
+        secure: true,
+        auth: { user: cfg.address, pass: cfg.password },
+      };
+    }
+
+    return {
+      host: cfg.smtpHost,
+      port: cfg.smtpPort,
+      secure: false,
+      auth: { user: cfg.address, pass: cfg.password },
+      tls: { rejectUnauthorized: cfg.smtpUseTLS },
+    };
   }
 
   private async fetchUnseen(client: ImapFlow): Promise<ParsedEmail[]> {
     const results: ParsedEmail[] = [];
 
-    // Phase 1: Collect metadata from FETCH — no other IMAP commands allowed
-    // during iteration (ImapFlow deadlocks on nested commands).
     interface PendingMessage {
       uid: string;
       senderAddress: string;
@@ -235,6 +340,7 @@ class EmailChannel implements Channel {
       textParts: string[];
       attachmentParts: MimePart[];
     }
+
     const pending: PendingMessage[] = [];
     const disallowedUids: string[] = [];
 
@@ -258,7 +364,7 @@ class EmailChannel implements Channel {
       const senderAddress = envelope.from?.[0]?.address?.toLowerCase() ?? '';
       if (!senderAddress) continue;
 
-      if (!isSenderAllowed(senderAddress)) {
+      if (!isSenderAllowed(senderAddress, this.cfg.allowedSenders)) {
         this.seenUids.add(uid);
         disallowedUids.push(uid);
         continue;
@@ -267,7 +373,6 @@ class EmailChannel implements Channel {
       const textParts: string[] = [];
       const attachmentParts: MimePart[] = [];
       walkBodyStructure(msg.bodyStructure, textParts, attachmentParts);
-
       pending.push({
         uid,
         senderAddress,
@@ -278,18 +383,16 @@ class EmailChannel implements Channel {
       });
     }
 
-    // Phase 2: Mark disallowed messages as seen (after fetch loop)
-    if (EMAIL_MARK_SEEN && disallowedUids.length > 0) {
+    if (this.cfg.markSeen && disallowedUids.length > 0) {
       for (const uid of disallowedUids) {
         try {
           await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
         } catch {
-          // ignore
+          /* ignore */
         }
       }
     }
 
-    // Phase 3: Download bodies and attachments for allowed messages
     for (const msg of pending) {
       let body = '';
       for (const partNum of msg.textParts) {
@@ -309,9 +412,8 @@ class EmailChannel implements Channel {
           );
         }
       }
-      body = body.slice(0, EMAIL_MAX_BODY_CHARS).trim();
+      body = body.slice(0, this.cfg.maxBodyChars).trim();
 
-      // Download attachments
       const attachments: EmailAttachment[] = [];
       if (msg.attachmentParts.length > 0) {
         const tmpDir = path.join(
@@ -331,12 +433,11 @@ class EmailChannel implements Channel {
             });
             if (dl?.content) {
               await pipeline(dl.content, createWriteStream(filePath));
-              const sizeBytes = fs.statSync(filePath).size;
               attachments.push({
                 filename: safeName,
                 mimeType: part.mimeType,
                 tempPath: filePath,
-                sizeBytes,
+                sizeBytes: fs.statSync(filePath).size,
               });
             }
           } catch (err) {
@@ -348,23 +449,18 @@ class EmailChannel implements Channel {
         }
       }
 
-      const subject = msg.envelope.subject ?? '(no subject)';
-      const messageId = msg.envelope.messageId ?? '';
-      const dateStr =
-        msg.envelope.date?.toISOString() ?? new Date().toISOString();
-
       results.push({
         uid: msg.uid,
         senderAddress: msg.senderAddress,
-        subject,
-        messageId,
-        dateStr,
+        subject: msg.envelope.subject ?? '(no subject)',
+        messageId: msg.envelope.messageId ?? '',
+        dateStr: msg.envelope.date?.toISOString() ?? new Date().toISOString(),
         body,
         attachments,
       });
 
       this.seenUids.add(msg.uid);
-      if (EMAIL_MARK_SEEN) {
+      if (this.cfg.markSeen) {
         await client.messageFlagsAdd(msg.uid, ['\\Seen'], { uid: true });
       }
     }
@@ -374,8 +470,6 @@ class EmailChannel implements Channel {
       const entries = [...this.seenUids];
       this.seenUids = new Set(entries.slice(-5_000));
     }
-
-    logger.info({ newMessages: results.length }, 'Email poll complete');
 
     return results;
   }
@@ -390,21 +484,32 @@ class EmailChannel implements Channel {
       uid,
       attachments,
     } = email;
-    const chatJid = emailToJid(senderAddress);
+    const { cfg } = this;
 
-    // Track reply-threading state
     if (subject) this.lastSubjectBySender.set(senderAddress, subject);
     if (messageId) this.lastMessageIdBySender.set(senderAddress, messageId);
 
-    // Notify channel registry about this chat
+    // Determine the chat JID for routing:
+    // - If this account has a groupJid, use that (all emails → one Telegram group)
+    //   and remember the sender for reply routing.
+    // - Otherwise fall back to per-sender email JID (legacy routing via EMAIL_GROUP_JID).
+    let chatJid: string;
+    if (cfg.groupJid) {
+      chatJid = cfg.groupJid;
+      this.lastSenderForGroup.set(cfg.groupJid, senderAddress);
+    } else {
+      chatJid = emailToJid(senderAddress);
+    }
+
     this.onChatMetadata(chatJid, dateStr, senderAddress, 'email', false);
 
-    // Format content — structured plaintext blob (same as NanoBot)
     const lines = [
       'Email received.',
+      `Account: ${cfg.address}`,
       `From: ${senderAddress}`,
       `Subject: ${subject}`,
       `Date: ${dateStr}`,
+      `Message-ID: ${messageId}`,
     ];
 
     if (attachments.length > 0) {
@@ -418,22 +523,18 @@ class EmailChannel implements Channel {
     if (attachments.length > 0) {
       lines.push('', '--- Attachments ---');
       for (const att of attachments) {
-        // Container path will be rewritten by index.ts after routing.
-        // Use a placeholder that index.ts replaces with the actual container path.
         lines.push(
           `[ATTACHMENT name="${att.filename}" type="${att.mimeType}" size="${att.sizeBytes}" tempPath="${att.tempPath}"]`,
         );
       }
     }
 
-    const content = lines.join('\n');
-
     const message: NewMessage = {
       id: `email-${uid}-${crypto.randomUUID()}`,
       chat_jid: chatJid,
       sender: senderAddress,
       sender_name: senderAddress,
-      content,
+      content: lines.join('\n'),
       timestamp: dateStr,
       is_from_me: false,
       is_bot_message: false,
@@ -442,9 +543,11 @@ class EmailChannel implements Channel {
 
     logger.info(
       {
+        account: cfg.address,
         from: senderAddress,
         subject,
         uid,
+        chatJid,
         attachmentCount: attachments.length,
       },
       'Incoming email received',
@@ -452,25 +555,9 @@ class EmailChannel implements Channel {
 
     this.onMessage(chatJid, message);
   }
-
-  private smtpConfig() {
-    if (EMAIL_SMTP_USE_SSL) {
-      return {
-        host: EMAIL_SMTP_HOST,
-        port: EMAIL_SMTP_PORT,
-        secure: true,
-        auth: { user: EMAIL_ADDRESS, pass: EMAIL_PASSWORD },
-      };
-    }
-    return {
-      host: EMAIL_SMTP_HOST,
-      port: EMAIL_SMTP_PORT,
-      secure: false,
-      auth: { user: EMAIL_ADDRESS, pass: EMAIL_PASSWORD },
-      tls: { rejectUnauthorized: EMAIL_SMTP_USE_TLS },
-    };
-  }
 }
+
+// ── Interfaces ────────────────────────────────────────────────────────────────
 
 interface ParsedEmail {
   uid: string;
@@ -488,22 +575,15 @@ interface MimePart {
   filename: string;
 }
 
-/**
- * Recursively walk an imapflow bodyStructure tree.
- * Fills textParts (part numbers for text/plain) and attachmentParts.
- */
 function walkBodyStructure(
   node: any,
   textParts: string[],
   attachmentParts: MimePart[],
 ): void {
   if (!node) return;
-
-  // Multipart: recurse into children
   if (node.childNodes && Array.isArray(node.childNodes)) {
-    for (const child of node.childNodes) {
+    for (const child of node.childNodes)
       walkBodyStructure(child, textParts, attachmentParts);
-    }
     return;
   }
 
@@ -513,13 +593,11 @@ function walkBodyStructure(
   const partNum = node.part || '1';
   const mimeType = `${type}/${subtype}`;
 
-  // Collect plain-text body (not attachment disposition)
   if (type === 'text' && subtype === 'plain' && disposition !== 'attachment') {
     textParts.push(partNum);
     return;
   }
 
-  // Collect attachments — explicit disposition or non-text content types
   if (
     disposition === 'attachment' ||
     disposition === 'inline' ||
@@ -534,7 +612,6 @@ function walkBodyStructure(
   }
 }
 
-/** Strip dangerous characters from filenames. */
 function sanitizeFilename(name: string): string {
   return name
     .replace(/[/\\:*?"<>|]/g, '_')
@@ -542,9 +619,271 @@ function sanitizeFilename(name: string): string {
     .slice(0, 200);
 }
 
-// ─── Channel registration ──────────────────────────────────────────────────
+// ── Email listing API (for IPC) ───────────────────────────────────────────────
+
+export interface ListEmailsParams {
+  account: string;
+  folder?: string;
+  limit?: number;
+  unreadOnly?: boolean;
+}
+
+export async function listEmails(params: ListEmailsParams): Promise<string> {
+  const accounts = parseEmailAccounts();
+  const cfg = accounts.find(
+    (a) => a.address.toLowerCase() === params.account.toLowerCase(),
+  );
+
+  if (!cfg) {
+    throw new Error(`Account not found: ${params.account}`);
+  }
+
+  let client: ImapFlow | null = null;
+  try {
+    // Build IMAP config
+    const imapConfig: any = {
+      host: cfg.imapHost,
+      port: cfg.imapPort,
+      secure: cfg.imapUseSSL,
+      logger: false,
+    };
+
+    if (cfg.authType === 'oauth2') {
+      const tokenMgr = new MicrosoftTokenManager({
+        tenantId: cfg.oauth2TenantId,
+        clientId: cfg.oauth2ClientId,
+        clientSecret: cfg.oauth2ClientSecret,
+        grantType: cfg.oauth2GrantType,
+        refreshToken: cfg.oauth2RefreshToken || undefined,
+      });
+      const token = await tokenMgr.getAccessToken();
+      imapConfig.auth = {
+        user: cfg.address,
+        accessToken: token,
+      };
+    } else {
+      imapConfig.auth = {
+        user: cfg.address,
+        pass: cfg.password,
+      };
+    }
+
+    client = new ImapFlow(imapConfig);
+    await client.connect();
+
+    const folder = params.folder || 'INBOX';
+    const limit = params.limit || 10;
+
+    await client.mailboxOpen(folder);
+
+    // Search for messages
+    const searchCriteria = params.unreadOnly ? { seen: false } : { all: true };
+    const uids = await client.search(searchCriteria, { uid: true });
+
+    if (!uids || !Array.isArray(uids) || uids.length === 0) {
+      await client.logout();
+      return `No emails found in ${folder}`;
+    }
+
+    // Get the last N messages (most recent)
+    const recentUids = uids.slice(-limit).reverse();
+
+    const lines: string[] = [
+      `📬 ${params.account} — ${folder} (${uids.length} total, showing ${recentUids.length})`,
+      '',
+    ];
+
+    for (const uid of recentUids) {
+      const msgResult = await client.fetchOne(
+        uid,
+        { envelope: true, flags: true },
+        { uid: true },
+      );
+      if (!msgResult || typeof msgResult === 'boolean') continue;
+      const env = msgResult.envelope;
+      if (!env) continue;
+
+      const from = env.from?.[0]?.address || 'unknown';
+      const subject = env.subject || '(no subject)';
+      const date = env.date ? new Date(env.date).toLocaleString('de-DE') : '';
+      const isUnread = !msgResult.flags?.has('\\Seen');
+      const marker = isUnread ? '🔵' : '⚪';
+
+      lines.push(`${marker} **${subject}**`);
+      lines.push(`   From: ${from} | ${date}`);
+      lines.push(`   Message-ID: ${env.messageId || 'n/a'}`);
+      lines.push('');
+    }
+
+    await client.logout();
+    return lines.join('\n');
+  } catch (err) {
+    if (client) {
+      try {
+        await client.logout();
+      } catch {}
+    }
+    throw err;
+  }
+}
+
+// ── Email action API (for IPC) ────────────────────────────────────────────────
+
+export interface EmailActionParams {
+  action: 'delete' | 'archive' | 'mark_read' | 'mark_unread';
+  messageId: string;
+  account: string;
+  archiveFolder?: string;
+}
+
+export async function performEmailAction(
+  params: EmailActionParams,
+): Promise<boolean> {
+  const accounts = parseEmailAccounts();
+  const cfg = accounts.find(
+    (a) => a.address.toLowerCase() === params.account.toLowerCase(),
+  );
+
+  if (!cfg) {
+    logger.warn(
+      { account: params.account },
+      'Email action failed: account not found',
+    );
+    return false;
+  }
+
+  let client: ImapFlow | null = null;
+  try {
+    // Build IMAP config
+    const imapConfig: any = {
+      host: cfg.imapHost,
+      port: cfg.imapPort,
+      secure: cfg.imapUseSSL,
+      logger: false,
+    };
+
+    if (cfg.authType === 'oauth2') {
+      const tokenMgr = new MicrosoftTokenManager({
+        tenantId: cfg.oauth2TenantId,
+        clientId: cfg.oauth2ClientId,
+        clientSecret: cfg.oauth2ClientSecret,
+        grantType: cfg.oauth2GrantType,
+        refreshToken: cfg.oauth2RefreshToken || undefined,
+      });
+      const token = await tokenMgr.getAccessToken();
+      imapConfig.auth = {
+        user: cfg.address,
+        accessToken: token,
+      };
+    } else {
+      imapConfig.auth = {
+        user: cfg.address,
+        pass: cfg.password,
+      };
+    }
+
+    client = new ImapFlow(imapConfig);
+    await client.connect();
+
+    // Find the email by Message-ID
+    await client.mailboxOpen(cfg.imapMailbox);
+    const searchResults = await client.search({
+      header: { 'message-id': params.messageId },
+    });
+
+    if (
+      !searchResults ||
+      !Array.isArray(searchResults) ||
+      searchResults.length === 0
+    ) {
+      logger.warn(
+        { messageId: params.messageId, account: params.account },
+        'Email not found',
+      );
+      await client.logout();
+      return false;
+    }
+
+    const uid = (searchResults as number[])[0];
+
+    switch (params.action) {
+      case 'delete':
+        await client.messageDelete(uid, { uid: true });
+        logger.info(
+          { messageId: params.messageId, account: params.account },
+          'Email deleted',
+        );
+        break;
+
+      case 'archive':
+        const archiveFolder = params.archiveFolder || 'Archive';
+        await client.messageMove(uid, archiveFolder, { uid: true });
+        logger.info(
+          {
+            messageId: params.messageId,
+            account: params.account,
+            folder: archiveFolder,
+          },
+          'Email archived',
+        );
+        break;
+
+      case 'mark_read':
+        await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+        logger.info(
+          { messageId: params.messageId, account: params.account },
+          'Email marked as read',
+        );
+        break;
+
+      case 'mark_unread':
+        await client.messageFlagsRemove(uid, ['\\Seen'], { uid: true });
+        logger.info(
+          { messageId: params.messageId, account: params.account },
+          'Email marked as unread',
+        );
+        break;
+    }
+
+    await client.logout();
+    return true;
+  } catch (err) {
+    logger.error(
+      {
+        err,
+        action: params.action,
+        messageId: params.messageId,
+        account: params.account,
+      },
+      'Email action failed',
+    );
+    if (client) {
+      try {
+        await client.logout();
+      } catch {}
+    }
+    return false;
+  }
+}
+
+// ── Channel registration — one instance per configured account ────────────────
 
 registerChannel('email', (opts: ChannelOpts): Channel | null => {
-  if (!EMAIL_ENABLED) return null;
-  return new EmailChannel(opts.onMessage, opts.onChatMetadata);
+  const accounts = parseEmailAccounts();
+  if (accounts.length === 0) return null;
+
+  if (accounts.length === 1) {
+    // Single account: return it directly (existing behaviour)
+    return new EmailChannel(accounts[0], opts.onMessage, opts.onChatMetadata);
+  }
+
+  // Multiple accounts: register each as its own channel instance
+  // Return the first; register the rest directly.
+  const [first, ...rest] = accounts;
+  for (const acc of rest) {
+    const ch = new EmailChannel(acc, opts.onMessage, opts.onChatMetadata);
+    // Connect immediately — the registry will only call connect() on the returned instance
+    void ch.connect();
+  }
+  return new EmailChannel(first, opts.onMessage, opts.onChatMetadata);
 });

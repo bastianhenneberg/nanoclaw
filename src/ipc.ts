@@ -305,6 +305,15 @@ export async function processTaskIpc(
     from?: string;
     html?: string;
     replyTo?: string;
+    // For email_action
+    action?: string;
+    messageId?: string;
+    account?: string;
+    archiveFolder?: string;
+    // For list_emails (folder already defined above)
+    limit?: number;
+    unreadOnly?: boolean;
+    requestId?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -605,6 +614,103 @@ export async function processTaskIpc(
         logger.warn(
           { data },
           'Invalid send_email request - missing to, subject, or body',
+        );
+      }
+      break;
+
+    case 'list_emails':
+      // List emails from IMAP inbox
+      if (data.account && data.requestId) {
+        const responseDir = path.join(
+          DATA_DIR,
+          'ipc',
+          sourceGroup,
+          'responses',
+        );
+        fs.mkdirSync(responseDir, { recursive: true });
+        const responseFile = path.join(responseDir, `${data.requestId}.json`);
+
+        try {
+          const { listEmails } = await import('./channels/email.js');
+          const result = await listEmails({
+            account: data.account as string,
+            folder: (data.folder as string) || 'INBOX',
+            limit: (data.limit as number) || 10,
+            unreadOnly: (data.unreadOnly as boolean) || false,
+          });
+          fs.writeFileSync(responseFile, JSON.stringify({ result }));
+          logger.info(
+            {
+              sourceGroup,
+              account: data.account,
+              count: result.split('\n').length,
+            },
+            'Email list fetched via IPC',
+          );
+        } catch (err) {
+          fs.writeFileSync(
+            responseFile,
+            JSON.stringify({ error: String(err) }),
+          );
+          logger.error(
+            { sourceGroup, account: data.account, err },
+            'Error listing emails',
+          );
+        }
+      }
+      break;
+
+    case 'email_action':
+      // Perform IMAP action (delete/archive/mark) on an email
+      if (data.action && data.messageId && data.account) {
+        try {
+          const { performEmailAction } = await import('./channels/email.js');
+          const success = await performEmailAction({
+            action: data.action as
+              | 'delete'
+              | 'archive'
+              | 'mark_read'
+              | 'mark_unread',
+            messageId: data.messageId as string,
+            account: data.account as string,
+            archiveFolder: (data.archiveFolder as string) || 'Archive',
+          });
+          if (success) {
+            logger.info(
+              {
+                sourceGroup,
+                action: data.action,
+                messageId: data.messageId,
+                account: data.account,
+              },
+              'Email action performed via IPC',
+            );
+          } else {
+            logger.warn(
+              {
+                sourceGroup,
+                action: data.action,
+                messageId: data.messageId,
+                account: data.account,
+              },
+              'Email action failed',
+            );
+          }
+        } catch (err) {
+          logger.error(
+            {
+              sourceGroup,
+              action: data.action,
+              messageId: data.messageId,
+              err,
+            },
+            'Error performing email action',
+          );
+        }
+      } else {
+        logger.warn(
+          { data },
+          'Invalid email_action request - missing action, messageId, or account',
         );
       }
       break;

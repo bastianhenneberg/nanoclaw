@@ -2,6 +2,13 @@
 
 All notable changes to NanoClaw will be documented in this file.
 
+## [1.4.0](https://github.com/qwibitai/nanoclaw/compare/v1.3.1...v1.4.0)
+
+- **feat:** IPC `list_emails` and `read_email` commands — agents can read emails from IMAP inboxes
+- **feat:** OAuth2 authentication for email accounts (XOAUTH2 SMTP/IMAP)
+- **feat:** Email accounts registry with multi-account support
+- **feat:** Infra-monitor script for server health checks
+
 ## [1.3.1](https://github.com/qwibitai/nanoclaw/compare/v1.3.0...v1.3.1)
 
 - **fix:** Telegram 409 polling conflict on restart — call `deleteWebhook` before `bot.start()`

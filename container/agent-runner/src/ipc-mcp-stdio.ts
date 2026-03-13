@@ -474,6 +474,123 @@ server.tool(
   },
 );
 
+server.tool(
+  'list_emails',
+  `List emails from an IMAP inbox. Use this to check for new or unread emails.`,
+  {
+    account: z.string().describe('Email account address (e.g., "info@crewtex.de")'),
+    folder: z.string().optional().describe('IMAP folder (default: "INBOX")'),
+    limit: z.number().optional().describe('Max emails to return (default: 10)'),
+    unread_only: z.boolean().optional().describe('Only show unread emails (default: false)'),
+  },
+  async (args) => {
+    const data = {
+      type: 'list_emails',
+      account: args.account,
+      folder: args.folder || 'INBOX',
+      limit: args.limit || 10,
+      unreadOnly: args.unread_only || false,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Write request and wait for response
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const requestFile = path.join(TASKS_DIR, `${requestId}.json`);
+    const responseFile = path.join(IPC_DIR, 'responses', `${requestId}.json`);
+    
+    fs.mkdirSync(path.join(IPC_DIR, 'responses'), { recursive: true });
+    fs.writeFileSync(requestFile, JSON.stringify({ ...data, requestId }));
+
+    // Poll for response (max 15 seconds)
+    const maxWait = 15000;
+    const pollInterval = 200;
+    let waited = 0;
+    
+    while (waited < maxWait) {
+      if (fs.existsSync(responseFile)) {
+        const response = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
+        fs.unlinkSync(responseFile);
+        
+        if (response.error) {
+          return { content: [{ type: 'text' as const, text: `Error: ${response.error}` }], isError: true };
+        }
+        
+        return { content: [{ type: 'text' as const, text: response.result }] };
+      }
+      await new Promise(r => setTimeout(r, pollInterval));
+      waited += pollInterval;
+    }
+
+    return { content: [{ type: 'text' as const, text: 'Timeout waiting for email list' }], isError: true };
+  },
+);
+
+server.tool(
+  'email_action',
+  `Perform an action on an email in the inbox. Use this to delete or archive emails after the user confirms.
+IMPORTANT: Always ask the user for confirmation before deleting emails!`,
+  {
+    action: z.enum(['delete', 'archive', 'mark_read', 'mark_unread']).describe('Action to perform'),
+    message_id: z.string().describe('The email Message-ID header (e.g., "<abc123@mail.example.com>")'),
+    account: z.string().describe('Email account address (e.g., "info@crewtex.de")'),
+    archive_folder: z.string().optional().describe('Folder to move to when archiving (default: "Archive")'),
+  },
+  async (args) => {
+    const data = {
+      type: 'email_action',
+      action: args.action,
+      messageId: args.message_id,
+      account: args.account,
+      archiveFolder: args.archive_folder || 'Archive',
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    const actionVerb = args.action === 'delete' ? 'Deletion' : 
+                       args.action === 'archive' ? 'Archive' :
+                       args.action === 'mark_read' ? 'Mark as read' : 'Mark as unread';
+
+    return { content: [{ type: 'text' as const, text: `${actionVerb} requested for email ${args.message_id}` }] };
+  },
+);
+
+server.tool(
+  'send_email',
+  `Send an email via SMTP. Use this to compose and send emails on behalf of the user.
+IMPORTANT: Always confirm with the user before sending an email! Show them the recipient, subject, and body first.`,
+  {
+    to: z.union([z.string(), z.array(z.string())]).describe('Recipient email address(es)'),
+    subject: z.string().describe('Email subject line'),
+    body: z.string().describe('Plain text email body'),
+    from: z.string().optional().describe('Sender address (defaults to the configured account address)'),
+    html: z.string().optional().describe('HTML email body (optional, sent alongside plain text)'),
+    reply_to: z.string().optional().describe('Reply-To address'),
+    account: z.string().optional().describe('Email account to send from (e.g., "info@crewtex.de"). Defaults to first configured account.'),
+  },
+  async (args) => {
+    const data = {
+      type: 'send_email',
+      to: args.to,
+      subject: args.subject,
+      body: args.body,
+      from: args.from,
+      html: args.html,
+      replyTo: args.reply_to,
+      account: args.account,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    const recipients = Array.isArray(args.to) ? args.to.join(', ') : args.to;
+    return { content: [{ type: 'text' as const, text: `Email to ${recipients} queued for sending.` }] };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

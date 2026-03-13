@@ -32,7 +32,9 @@ function getTransporter(): Transporter | null {
         user: EMAIL_ADDRESS,
         pass: EMAIL_PASSWORD,
       },
-      ...(EMAIL_SMTP_USE_TLS && !EMAIL_SMTP_USE_SSL ? { requireTLS: true } : {}),
+      ...(EMAIL_SMTP_USE_TLS && !EMAIL_SMTP_USE_SSL
+        ? { requireTLS: true }
+        : {}),
     });
   }
 
