@@ -15,6 +15,8 @@ const envConfig = readEnvFile([
   'OLLAMA_MODEL',
   'WEBHOOK_LLM_PROVIDER',
   'MEMORY_ENABLED',
+  'AI_BRAIN_API_URL',
+  'AI_BRAIN_API_KEY',
   'EMAIL_ENABLED',
   'EMAIL_IMAP_HOST',
   'EMAIL_IMAP_PORT',
@@ -132,6 +134,12 @@ export const OLLAMA_MODEL =
 export const MEMORY_ENABLED =
   (process.env.MEMORY_ENABLED ?? envConfig.MEMORY_ENABLED ?? 'true') !==
   'false';
+
+// AI Brain API for centralized agent memory
+export const AI_BRAIN_API_URL =
+  process.env.AI_BRAIN_API_URL || envConfig.AI_BRAIN_API_URL || '';
+export const AI_BRAIN_API_KEY =
+  process.env.AI_BRAIN_API_KEY || envConfig.AI_BRAIN_API_KEY || '';
 
 // ─── Email channel configuration ──────────────────────────────────────────
 // Set EMAIL_ENABLED=true and configure IMAP/SMTP to activate email support.

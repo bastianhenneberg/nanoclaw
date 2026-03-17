@@ -1,20 +1,32 @@
 /**
  * Persistent Memory System for NanoClaw
  *
- * Inspired by OpenClaw's memory architecture. Stores conversation facts as
- * Markdown files per group:
- *   groups/{folder}/MEMORY.md          — curated long-term facts
- *   groups/{folder}/memory/YYYY-MM-DD.md — daily session summaries (append-only)
+ * Two-tier storage:
+ *   1. Local files (primary, always available):
+ *      groups/{folder}/MEMORY.md          — curated long-term facts
+ *      groups/{folder}/memory/YYYY-MM-DD.md — daily session summaries
  *
- * Memory is injected into the prompt context at session start, and flushed
- * (distilled) by a lightweight LLM call after each successful session.
+ *   2. AI Brain API (centralized, cross-agent):
+ *      POST /api/v1/agent-memories — store distilled facts
+ *      GET  /api/v1/agent-memories — read memories with scope isolation
+ *
+ * Phase 1 (Dual-Write): writes to both, reads from local (fallback-safe).
+ * If AI Brain is unreachable, local files are always used.
  */
 import fs from 'fs';
 import path from 'path';
 
-import { GROUPS_DIR, MEMORY_ENABLED, TIMEZONE } from './config.js';
+import {
+  AI_BRAIN_API_KEY,
+  AI_BRAIN_API_URL,
+  GROUPS_DIR,
+  MEMORY_ENABLED,
+  TIMEZONE,
+} from './config.js';
 import { callLlm } from './llm-provider.js';
 import { logger } from './logger.js';
+
+const AGENT_NAME = 'nanoclaw';
 
 /**
  * Maximum characters of memory injected into each prompt.
@@ -45,6 +57,112 @@ Do NOT extract:
 
 Format output as a concise Markdown bullet list (•). If nothing is worth remembering, reply with exactly: NOTHING`;
 
+/** Check if AI Brain API is configured. */
+function isAiBrainEnabled(): boolean {
+  return !!(AI_BRAIN_API_URL && AI_BRAIN_API_KEY);
+}
+
+/**
+ * Write a memory to the AI Brain API (fire-and-forget).
+ * Never throws — failures are logged and silently ignored.
+ */
+async function writeToAiBrain(
+  groupFolder: string,
+  content: string,
+  type: 'short-term' | 'long-term' = 'short-term',
+): Promise<void> {
+  if (!isAiBrainEnabled()) return;
+
+  try {
+    const response = await fetch(`${AI_BRAIN_API_URL}/api/v1/agent-memories`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': AI_BRAIN_API_KEY,
+      },
+      body: JSON.stringify({
+        agent: AGENT_NAME,
+        group: groupFolder,
+        scope: 'group',
+        type,
+        content,
+      }),
+    });
+
+    if (!response.ok) {
+      logger.warn(
+        { groupFolder, status: response.status },
+        'AI Brain API write failed',
+      );
+    } else {
+      logger.debug({ groupFolder }, 'Memory synced to AI Brain');
+    }
+  } catch (err) {
+    logger.warn({ groupFolder, err }, 'AI Brain API unreachable');
+  }
+}
+
+/**
+ * Read memories from AI Brain API for a group.
+ * Returns formatted string or null if unavailable.
+ */
+async function readFromAiBrain(
+  groupFolder: string,
+  days: number = MAX_DAILY_FILES,
+): Promise<string | null> {
+  if (!isAiBrainEnabled()) return null;
+
+  try {
+    const params = new URLSearchParams({
+      agent: AGENT_NAME,
+      group: groupFolder,
+      days: String(days),
+      limit: '50',
+    });
+
+    const response = await fetch(
+      `${AI_BRAIN_API_URL}/api/v1/agent-memories?${params}`,
+      {
+        headers: { 'X-API-Key': AI_BRAIN_API_KEY },
+      },
+    );
+
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as {
+      data: Array<{
+        content: string;
+        type: string;
+        scope: string;
+        created_at: string;
+      }>;
+    };
+
+    if (!data.data || data.data.length === 0) return null;
+
+    // Separate long-term and short-term
+    const longTerm = data.data
+      .filter((m) => m.type === 'long-term')
+      .map((m) => m.content);
+    const shortTerm = data.data
+      .filter((m) => m.type === 'short-term')
+      .map((m) => m.content);
+
+    const parts: string[] = [];
+    if (longTerm.length > 0) {
+      parts.push(`## Long-term Memory\n${longTerm.join('\n')}`);
+    }
+    if (shortTerm.length > 0) {
+      parts.push(shortTerm.join('\n\n'));
+    }
+
+    return parts.length > 0 ? parts.join('\n\n') : null;
+  } catch (err) {
+    logger.warn({ groupFolder, err }, 'AI Brain API read failed, using local');
+    return null;
+  }
+}
+
 export function ensureMemoryDir(groupFolder: string): string {
   const memDir = path.join(GROUPS_DIR, groupFolder, 'memory');
   fs.mkdirSync(memDir, { recursive: true });
@@ -52,13 +170,9 @@ export function ensureMemoryDir(groupFolder: string): string {
 }
 
 /**
- * Read the full memory context for a group.
- * Returns a formatted string to be prepended to the agent prompt,
- * or an empty string if no memory exists yet.
+ * Read the full memory context for a group from local files.
  */
-export function readMemoryContext(groupFolder: string): string {
-  if (!MEMORY_ENABLED) return '';
-
+function readLocalMemoryContext(groupFolder: string): string {
   const groupDir = path.join(GROUPS_DIR, groupFolder);
   const memDir = path.join(groupDir, 'memory');
   const parts: string[] = [];
@@ -77,7 +191,7 @@ export function readMemoryContext(groupFolder: string): string {
     const dailyFiles = fs
       .readdirSync(memDir)
       .filter((f) => /^\d{4}-\d{2}-\d{2}.*\.md$/.test(f))
-      .sort() // lexicographic = chronological for YYYY-MM-DD prefix
+      .sort()
       .slice(-MAX_DAILY_FILES);
 
     for (const file of dailyFiles) {
@@ -92,7 +206,6 @@ export function readMemoryContext(groupFolder: string): string {
 
   let combined = parts.join('\n\n');
 
-  // Trim from the front to stay within token budget (keep most recent content)
   if (combined.length > MAX_CONTEXT_CHARS) {
     combined = combined.slice(-MAX_CONTEXT_CHARS);
   }
@@ -101,14 +214,36 @@ export function readMemoryContext(groupFolder: string): string {
 }
 
 /**
+ * Read memory context — tries AI Brain first, falls back to local files.
+ */
+export async function readMemoryContext(
+  groupFolder: string,
+): Promise<string> {
+  if (!MEMORY_ENABLED) return '';
+
+  // Try AI Brain first
+  const brainContext = await readFromAiBrain(groupFolder);
+  if (brainContext) {
+    let combined = brainContext;
+    if (combined.length > MAX_CONTEXT_CHARS) {
+      combined = combined.slice(-MAX_CONTEXT_CHARS);
+    }
+    return combined;
+  }
+
+  // Fallback to local files
+  return readLocalMemoryContext(groupFolder);
+}
+
+/**
  * Inject the memory context as a preamble into the agent prompt.
  * If no memory exists the original prompt is returned unchanged.
  */
-export function injectMemoryIntoPrompt(
+export async function injectMemoryIntoPrompt(
   prompt: string,
   groupFolder: string,
-): string {
-  const context = readMemoryContext(groupFolder);
+): Promise<string> {
+  const context = await readMemoryContext(groupFolder);
   if (!context) return prompt;
 
   const preamble = [
@@ -126,7 +261,7 @@ export function injectMemoryIntoPrompt(
 
 /**
  * After a successful session, call the LLM to distill key facts
- * and append them to today's daily memory file.
+ * and store them both locally and in AI Brain.
  *
  * This runs fire-and-forget (non-blocking). Failures are logged but
  * never propagate to the caller.
@@ -179,8 +314,6 @@ async function flushSessionMemory(
     return;
   }
 
-  const memDir = ensureMemoryDir(groupFolder);
-
   // Today's date in the user's local timezone (YYYY-MM-DD)
   const today = new Date().toLocaleDateString('en-CA', {
     timeZone: TIMEZONE,
@@ -191,19 +324,22 @@ async function flushSessionMemory(
     minute: '2-digit',
   });
 
-  const dailyFile = path.join(memDir, `${today}.md`);
+  const entry = `### ${timeStr}\n${facts}`;
 
-  // Create file header on first entry of the day
+  // 1. Write locally (always — primary storage)
+  const memDir = ensureMemoryDir(groupFolder);
+  const dailyFile = path.join(memDir, `${today}.md`);
   const isNewFile = !fs.existsSync(dailyFile);
   const header = isNewFile ? `# Memory — ${today}\n` : '';
-  const entry = `${header}\n### ${timeStr}\n${facts}\n`;
-
-  fs.appendFileSync(dailyFile, entry, 'utf-8');
+  fs.appendFileSync(dailyFile, `${header}\n${entry}\n`, 'utf-8');
 
   logger.info(
     { groupFolder, file: `memory/${today}.md`, chars: facts.length },
-    'Memory flushed',
+    'Memory flushed (local)',
   );
+
+  // 2. Write to AI Brain (fire-and-forget, never blocks)
+  void writeToAiBrain(groupFolder, entry);
 }
 
 /**
@@ -212,6 +348,7 @@ async function flushSessionMemory(
  */
 export function getMemoryStatus(groupFolder: string): {
   enabled: boolean;
+  aiBrainEnabled: boolean;
   hasMainMemory: boolean;
   dailyFileCount: number;
   totalSizeBytes: number;
@@ -219,6 +356,7 @@ export function getMemoryStatus(groupFolder: string): {
   if (!MEMORY_ENABLED) {
     return {
       enabled: false,
+      aiBrainEnabled: false,
       hasMainMemory: false,
       dailyFileCount: 0,
       totalSizeBytes: 0,
@@ -246,5 +384,11 @@ export function getMemoryStatus(groupFolder: string): {
     }
   }
 
-  return { enabled: true, hasMainMemory, dailyFileCount, totalSizeBytes };
+  return {
+    enabled: true,
+    aiBrainEnabled: isAiBrainEnabled(),
+    hasMainMemory,
+    dailyFileCount,
+    totalSizeBytes,
+  };
 }

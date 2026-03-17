@@ -52,7 +52,12 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { initBotPool } from './channels/telegram.js';
 import { startIpcWatcher } from './ipc.js';
-import { findChannel, formatMessages, formatOutbound, routeOutbound } from './router.js';
+import {
+  findChannel,
+  formatMessages,
+  formatOutbound,
+  routeOutbound,
+} from './router.js';
 import {
   isSenderAllowed,
   isTriggerAllowed,
@@ -326,7 +331,7 @@ async function runAgent(
     : undefined;
 
   // Inject persistent memory context as a preamble to the prompt
-  const promptWithMemory = injectMemoryIntoPrompt(prompt, group.folder);
+  const promptWithMemory = await injectMemoryIntoPrompt(prompt, group.folder);
 
   try {
     const output = await runContainerAgent(
