@@ -98,6 +98,130 @@ function resolveHostPath(
   return containerPath;
 }
 
+/**
+ * Send a media file (photo/video/document) via IPC.
+ * Resolves container path → host path, checks existence, routes to pool or deps sender.
+ */
+async function sendMediaFile(
+  type: 'photo' | 'video' | 'document',
+  data: {
+    chatJid: string;
+    filePath: string;
+    caption?: string;
+    sender?: string;
+  },
+  sourceGroup: string,
+  registeredGroups: Record<string, RegisteredGroup>,
+  deps: IpcDeps,
+): Promise<void> {
+  const hostFilePath = resolveHostPath(
+    data.filePath,
+    sourceGroup,
+    registeredGroups,
+  );
+  if (!hostFilePath || !fs.existsSync(hostFilePath)) {
+    logger.error(
+      { containerPath: data.filePath, hostFilePath, sourceGroup, type },
+      `${type} file not found on host`,
+    );
+    return;
+  }
+
+  const poolSenders: Record<
+    string,
+    (
+      jid: string,
+      fp: string,
+      cap: string | undefined,
+      sender: string,
+      sg: string,
+    ) => Promise<void>
+  > = {
+    photo: sendPoolPhoto,
+    video: sendPoolVideo,
+    document: sendPoolDocument,
+  };
+  const depsSenders: Record<
+    string,
+    (jid: string, fp: string, cap?: string) => Promise<void>
+  > = {
+    photo: deps.sendPhoto,
+    video: deps.sendVideo,
+    document: deps.sendDocument,
+  };
+
+  if (data.sender) {
+    await poolSenders[type](
+      data.chatJid,
+      hostFilePath,
+      data.caption,
+      data.sender,
+      sourceGroup,
+    );
+  } else {
+    await depsSenders[type](data.chatJid, hostFilePath, data.caption);
+  }
+
+  logger.info(
+    {
+      chatJid: data.chatJid,
+      sourceGroup,
+      sender: data.sender,
+      containerPath: data.filePath,
+      hostPath: hostFilePath,
+    },
+    `IPC ${type} sent`,
+  );
+}
+
+/**
+ * Dispatch a single IPC message (text, photo, video, or document).
+ */
+async function dispatchIpcMessage(
+  data: {
+    type: string;
+    chatJid: string;
+    text?: string;
+    filePath?: string;
+    caption?: string;
+    sender?: string;
+  },
+  sourceGroup: string,
+  registeredGroups: Record<string, RegisteredGroup>,
+  deps: IpcDeps,
+): Promise<void> {
+  if (data.type === 'message' && data.text) {
+    if (data.sender && data.chatJid.startsWith('tg:')) {
+      await sendPoolMessage(data.chatJid, data.text, data.sender, sourceGroup);
+    } else {
+      await deps.sendMessage(data.chatJid, data.text);
+    }
+    logger.info(
+      { chatJid: data.chatJid, sourceGroup, sender: data.sender },
+      'IPC message sent',
+    );
+  } else if (
+    (data.type === 'photo' ||
+      data.type === 'video' ||
+      data.type === 'document') &&
+    data.filePath &&
+    data.chatJid.startsWith('tg:')
+  ) {
+    await sendMediaFile(
+      data.type,
+      data as {
+        chatJid: string;
+        filePath: string;
+        caption?: string;
+        sender?: string;
+      },
+      sourceGroup,
+      registeredGroups,
+      deps,
+    );
+  }
+}
+
 let ipcWatcherRunning = false;
 
 export function startIpcWatcher(deps: IpcDeps): void {
@@ -160,145 +284,12 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  if (
-                    data.type === 'photo' &&
-                    data.filePath &&
-                    data.chatJid.startsWith('tg:')
-                  ) {
-                    // Resolve container path → host path
-                    const hostFilePath = resolveHostPath(
-                      data.filePath,
-                      sourceGroup,
-                      registeredGroups,
-                    );
-                    if (!hostFilePath || !fs.existsSync(hostFilePath)) {
-                      logger.error(
-                        {
-                          containerPath: data.filePath,
-                          hostFilePath,
-                          sourceGroup,
-                        },
-                        'Photo file not found on host',
-                      );
-                    } else if (data.sender) {
-                      await sendPoolPhoto(
-                        data.chatJid,
-                        hostFilePath,
-                        data.caption,
-                        data.sender,
-                        sourceGroup,
-                      );
-                    } else {
-                      await deps.sendPhoto(
-                        data.chatJid,
-                        hostFilePath,
-                        data.caption,
-                      );
-                    }
-                    logger.info(
-                      {
-                        chatJid: data.chatJid,
-                        sourceGroup,
-                        sender: data.sender,
-                        containerPath: data.filePath,
-                        hostPath: hostFilePath,
-                      },
-                      'IPC photo sent',
-                    );
-                  } else if (
-                    (data.type === 'video' || data.type === 'document') &&
-                    data.filePath &&
-                    data.chatJid.startsWith('tg:')
-                  ) {
-                    const hostFilePath = resolveHostPath(
-                      data.filePath,
-                      sourceGroup,
-                      registeredGroups,
-                    );
-                    if (!hostFilePath || !fs.existsSync(hostFilePath)) {
-                      logger.error(
-                        {
-                          containerPath: data.filePath,
-                          hostFilePath,
-                          sourceGroup,
-                          type: data.type,
-                        },
-                        `${data.type} file not found on host`,
-                      );
-                    } else if (data.type === 'video') {
-                      if (data.sender) {
-                        await sendPoolVideo(
-                          data.chatJid,
-                          hostFilePath,
-                          data.caption,
-                          data.sender,
-                          sourceGroup,
-                        );
-                      } else {
-                        await deps.sendVideo(
-                          data.chatJid,
-                          hostFilePath,
-                          data.caption,
-                        );
-                      }
-                      logger.info(
-                        {
-                          chatJid: data.chatJid,
-                          sourceGroup,
-                          sender: data.sender,
-                          containerPath: data.filePath,
-                          hostPath: hostFilePath,
-                        },
-                        'IPC video sent',
-                      );
-                    } else {
-                      if (data.sender) {
-                        await sendPoolDocument(
-                          data.chatJid,
-                          hostFilePath,
-                          data.caption,
-                          data.sender,
-                          sourceGroup,
-                        );
-                      } else {
-                        await deps.sendDocument(
-                          data.chatJid,
-                          hostFilePath,
-                          data.caption,
-                        );
-                      }
-                      logger.info(
-                        {
-                          chatJid: data.chatJid,
-                          sourceGroup,
-                          sender: data.sender,
-                          containerPath: data.filePath,
-                          hostPath: hostFilePath,
-                        },
-                        'IPC document sent',
-                      );
-                    }
-                  } else if (data.type === 'message' && data.text) {
-                    // Text message
-                    if (data.sender && data.chatJid.startsWith('tg:')) {
-                      await sendPoolMessage(
-                        data.chatJid,
-                        data.text,
-                        data.sender,
-                        sourceGroup,
-                      );
-                    } else {
-                      await deps.sendMessage(data.chatJid, data.text);
-                    }
-                    logger.info(
-                      {
-                        chatJid: data.chatJid,
-                        sourceGroup,
-                        sender: data.sender,
-                      },
-                      'IPC message sent',
-                    );
-                  }
+                  await dispatchIpcMessage(
+                    data,
+                    sourceGroup,
+                    registeredGroups,
+                    deps,
+                  );
                 } else {
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
