@@ -332,6 +332,12 @@ class EmailChannel implements Channel {
   private async fetchUnseen(client: ImapFlow): Promise<ParsedEmail[]> {
     const results: ParsedEmail[] = [];
 
+    // Check if mailbox has any messages (prevents "Invalid messageset" on empty mailboxes)
+    const mailboxStatus = client.mailbox;
+    if (!mailboxStatus || mailboxStatus.exists === 0) {
+      return results; // Empty mailbox, nothing to fetch
+    }
+
     interface PendingMessage {
       uid: string;
       senderAddress: string;
