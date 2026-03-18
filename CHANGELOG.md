@@ -2,6 +2,14 @@
 
 All notable changes to NanoClaw will be documented in this file.
 
+## [1.5.1](https://github.com/qwibitai/nanoclaw/compare/v1.5.0...v1.5.1)
+
+- **refactor:** Extract `sendMediaFile()` + `dispatchIpcMessage()` helpers in IPC — deduplicate 4x repeated media send pattern
+- **refactor:** Extract `handleIncomingMessage()` from inline `main()` callback in index.ts
+- **refactor:** Add `requireChannelMethod()` helper to replace IPC deps boilerplate
+- **refactor:** Split `buildVolumeMounts()` into `prepareGroupEnvironment()` (filesystem setup) + pure mount config
+- **cleanup:** Remove unused `escapeXml`/`formatMessages` re-export from index.ts
+
 ## [1.5.0](https://github.com/qwibitai/nanoclaw/compare/v1.4.0...v1.5.0)
 
 - **feat:** Telegram video sending — `send_video` MCP tool + IPC type + channel method + pool bot support

@@ -18,6 +18,7 @@ import {
   OLLAMA_MODEL,
   WEBHOOK_LLM_PROVIDER,
 } from './config.js';
+import { PROXY_BIND_HOST } from './container-runtime.js';
 import { logger } from './logger.js';
 
 export type LlmProvider = 'claude' | 'ollama';
@@ -116,7 +117,8 @@ async function callClaude(req: LlmRequest): Promise<LlmResponse> {
     body['system'] = req.system;
   }
 
-  const proxyUrl = `http://localhost:${CREDENTIAL_PROXY_PORT}/v1/messages`;
+  const proxyHost = PROXY_BIND_HOST || 'localhost';
+  const proxyUrl = `http://${proxyHost}:${CREDENTIAL_PROXY_PORT}/v1/messages`;
 
   logger.debug({ model, proxyUrl }, 'Calling Claude via credential proxy');
 

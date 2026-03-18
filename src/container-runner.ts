@@ -58,69 +58,23 @@ interface VolumeMount {
   readonly: boolean;
 }
 
-function buildVolumeMounts(
-  group: RegisteredGroup,
-  isMain: boolean,
-): VolumeMount[] {
-  const mounts: VolumeMount[] = [];
+/**
+ * Prepare the host filesystem for a group's container session.
+ * Creates directories, writes default settings, syncs skills and agent-runner source.
+ * Returns paths needed by buildVolumeMounts.
+ */
+function prepareGroupEnvironment(groupFolder: string): {
+  groupSessionsDir: string;
+  groupIpcDir: string;
+  groupAgentRunnerDir: string;
+} {
   const projectRoot = process.cwd();
-  const groupDir = resolveGroupFolderPath(group.folder);
-
-  if (isMain) {
-    // Main gets the project root read-only. Writable paths the agent needs
-    // (group folder, IPC, .claude/) are mounted separately below.
-    // Read-only prevents the agent from modifying host application code
-    // (src/, dist/, package.json, etc.) which would bypass the sandbox
-    // entirely on next restart.
-    mounts.push({
-      hostPath: projectRoot,
-      containerPath: '/workspace/project',
-      readonly: true,
-    });
-
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the credential proxy, never exposed to containers.
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
-
-    // Main also gets its group folder as the working directory
-    mounts.push({
-      hostPath: groupDir,
-      containerPath: '/workspace/group',
-      readonly: false,
-    });
-  } else {
-    // Other groups only get their own folder
-    mounts.push({
-      hostPath: groupDir,
-      containerPath: '/workspace/group',
-      readonly: false,
-    });
-
-    // Global memory directory (read-only for non-main)
-    // Only directory mounts are supported, not file mounts
-    const globalDir = path.join(GROUPS_DIR, 'global');
-    if (fs.existsSync(globalDir)) {
-      mounts.push({
-        hostPath: globalDir,
-        containerPath: '/workspace/global',
-        readonly: true,
-      });
-    }
-  }
 
   // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
   const groupSessionsDir = path.join(
     DATA_DIR,
     'sessions',
-    group.folder,
+    groupFolder,
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
@@ -131,14 +85,8 @@ function buildVolumeMounts(
       JSON.stringify(
         {
           env: {
-            // Enable agent swarms (subagent orchestration)
-            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
             CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-            // Load CLAUDE.md from additional mounted directories
-            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
             CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-            // Enable Claude's memory feature (persists user preferences between sessions)
-            // https://code.claude.com/docs/en/memory#manage-auto-memory
             CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
           },
         },
@@ -149,7 +97,7 @@ function buildVolumeMounts(
   }
 
   // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
+  const skillsSrc = path.join(projectRoot, 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
   if (fs.existsSync(skillsSrc)) {
     for (const skillDir of fs.readdirSync(skillsSrc)) {
@@ -159,27 +107,16 @@ function buildVolumeMounts(
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
-  mounts.push({
-    hostPath: groupSessionsDir,
-    containerPath: '/home/node/.claude',
-    readonly: false,
-  });
 
-  // Per-group IPC namespace: each group gets its own IPC directory
-  // This prevents cross-group privilege escalation via IPC
-  const groupIpcDir = resolveGroupIpcPath(group.folder);
+  // Per-group IPC namespace
+  const groupIpcDir = resolveGroupIpcPath(groupFolder);
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
-  mounts.push({
-    hostPath: groupIpcDir,
-    containerPath: '/workspace/ipc',
-    readonly: false,
-  });
 
-  // Copy agent-runner source into a per-group writable location so agents
-  // can customize it (add tools, change behavior) without affecting other
-  // groups. Recompiled on container startup via entrypoint.sh.
+  // Copy agent-runner source into a per-group writable location.
+  // Always sync so code changes propagate to existing sessions.
+  // Agent-added files in the group dir are preserved.
   const agentRunnerSrc = path.join(
     projectRoot,
     'container',
@@ -189,15 +126,10 @@ function buildVolumeMounts(
   const groupAgentRunnerDir = path.join(
     DATA_DIR,
     'sessions',
-    group.folder,
+    groupFolder,
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    // Always sync source files from the canonical agent-runner into the
-    // per-group cache. This ensures code changes (new MCP servers, bug fixes)
-    // propagate to existing sessions without requiring manual cache cleanup.
-    // Agent-added files in the group dir are preserved (we only overwrite
-    // files that exist in the source).
     fs.mkdirSync(groupAgentRunnerDir, { recursive: true });
     for (const file of fs.readdirSync(agentRunnerSrc)) {
       const src = path.join(agentRunnerSrc, file);
@@ -207,8 +139,85 @@ function buildVolumeMounts(
       }
     }
   }
+
+  return { groupSessionsDir, groupIpcDir, groupAgentRunnerDir };
+}
+
+/**
+ * Build the list of volume mounts for a container.
+ * Pure configuration — no filesystem side effects.
+ */
+function buildVolumeMounts(
+  group: RegisteredGroup,
+  isMain: boolean,
+  env: {
+    groupSessionsDir: string;
+    groupIpcDir: string;
+    groupAgentRunnerDir: string;
+  },
+): VolumeMount[] {
+  const mounts: VolumeMount[] = [];
+  const projectRoot = process.cwd();
+  const groupDir = resolveGroupFolderPath(group.folder);
+
+  if (isMain) {
+    // Main gets the project root read-only.
+    mounts.push({
+      hostPath: projectRoot,
+      containerPath: '/workspace/project',
+      readonly: true,
+    });
+
+    // Shadow .env so the agent cannot read secrets from the mounted project root.
+    const envFile = path.join(projectRoot, '.env');
+    if (fs.existsSync(envFile)) {
+      mounts.push({
+        hostPath: '/dev/null',
+        containerPath: '/workspace/project/.env',
+        readonly: true,
+      });
+    }
+
+    mounts.push({
+      hostPath: groupDir,
+      containerPath: '/workspace/group',
+      readonly: false,
+    });
+  } else {
+    mounts.push({
+      hostPath: groupDir,
+      containerPath: '/workspace/group',
+      readonly: false,
+    });
+
+    // Global memory directory (read-only for non-main)
+    const globalDir = path.join(GROUPS_DIR, 'global');
+    if (fs.existsSync(globalDir)) {
+      mounts.push({
+        hostPath: globalDir,
+        containerPath: '/workspace/global',
+        readonly: true,
+      });
+    }
+  }
+
+  // Claude sessions
   mounts.push({
-    hostPath: groupAgentRunnerDir,
+    hostPath: env.groupSessionsDir,
+    containerPath: '/home/node/.claude',
+    readonly: false,
+  });
+
+  // IPC namespace
+  mounts.push({
+    hostPath: env.groupIpcDir,
+    containerPath: '/workspace/ipc',
+    readonly: false,
+  });
+
+  // Agent-runner source
+  mounts.push({
+    hostPath: env.groupAgentRunnerDir,
     containerPath: '/app/src',
     readonly: false,
   });
@@ -223,7 +232,7 @@ function buildVolumeMounts(
     });
   }
 
-  // Additional mounts validated against external allowlist (tamper-proof from containers)
+  // Additional mounts validated against external allowlist
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
       group.containerConfig.additionalMounts,
@@ -349,7 +358,8 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const env = prepareGroupEnvironment(group.folder);
+  const mounts = buildVolumeMounts(group, input.isMain, env);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const containerArgs = buildContainerArgs(

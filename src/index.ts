@@ -75,9 +75,6 @@ import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { parseImageReferences } from './image.js';
 import { logger } from './logger.js';
 
-// Re-export for backwards compatibility during refactor
-export { escapeXml, formatMessages } from './router.js';
-
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
@@ -513,6 +510,94 @@ function ensureContainerSystemRunning(): void {
   cleanupOrphans();
 }
 
+/**
+ * Handle an incoming message from any channel.
+ * Applies email wildcard routing, sender allowlist, and email attachment handling
+ * before storing the message in the database.
+ */
+/**
+ * Resolve a channel for a JID and call a method on it.
+ * Throws if no channel owns the JID or the method is not supported.
+ */
+function requireChannelMethod(jid: string, method: string): any {
+  const channel = findChannel(channels, jid);
+  if (!channel) throw new Error(`No channel for JID: ${jid}`);
+  if (!(method in channel))
+    throw new Error(`Channel for ${jid} does not support ${method}`);
+  return (channel as any)[method].bind(channel);
+}
+
+function handleIncomingMessage(chatJid: string, msg: NewMessage): void {
+  // Email wildcard routing: if an email arrives for a sender that has no
+  // dedicated registered group, reroute to EMAIL_GROUP_JID so a single
+  // group can process all incoming emails.
+  if (
+    chatJid.startsWith('email:') &&
+    !registeredGroups[chatJid] &&
+    EMAIL_GROUP_JID &&
+    registeredGroups[EMAIL_GROUP_JID]
+  ) {
+    logger.debug(
+      { from: chatJid, to: EMAIL_GROUP_JID },
+      'Email wildcard routing: rerouting to default email group',
+    );
+    msg = { ...msg, chat_jid: EMAIL_GROUP_JID };
+    chatJid = EMAIL_GROUP_JID;
+  }
+
+  // Sender allowlist drop mode: discard messages from denied senders before storing
+  if (!msg.is_from_me && !msg.is_bot_message && registeredGroups[chatJid]) {
+    const cfg = loadSenderAllowlist();
+    if (
+      shouldDropMessage(chatJid, cfg) &&
+      !isSenderAllowed(chatJid, msg.sender, cfg)
+    ) {
+      if (cfg.logDenied) {
+        logger.debug(
+          { chatJid, sender: msg.sender },
+          'sender-allowlist: dropping message (drop mode)',
+        );
+      }
+      return;
+    }
+  }
+
+  // Email attachment handling: copy temp files into the target group folder
+  // so the agent container can access them at /workspace/group/attachments/
+  if (msg.emailAttachments && msg.emailAttachments.length > 0) {
+    const groupFolder = registeredGroups[chatJid]?.folder;
+    if (groupFolder) {
+      const attDir = path.join(GROUPS_DIR, groupFolder, 'attachments');
+      fs.mkdirSync(attDir, { recursive: true });
+
+      let updatedContent = msg.content;
+      for (const att of msg.emailAttachments) {
+        const destFilename = `email-${Date.now()}-${att.filename}`;
+        const destPath = path.join(attDir, destFilename);
+        try {
+          fs.copyFileSync(att.tempPath, destPath);
+          updatedContent = updatedContent.replace(
+            `tempPath="${att.tempPath}"`,
+            `path="/workspace/group/attachments/${destFilename}"`,
+          );
+          logger.info(
+            { groupFolder, filename: destFilename },
+            'Email attachment copied to group folder',
+          );
+        } catch (err) {
+          logger.warn(
+            { err, src: att.tempPath },
+            'Failed to copy email attachment',
+          );
+        }
+      }
+      msg = { ...msg, content: updatedContent };
+    }
+  }
+
+  storeMessage(msg);
+}
+
 async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
@@ -589,80 +674,12 @@ async function main(): Promise<void> {
       // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
       if (trimmed === '/remote-control' || trimmed === '/remote-control-end') {
-        handleRemoteControl(trimmed, chatJid, msg).catch((err) =>
+        handleRemoteControl(trimmed, chatJid, msg).catch((err: unknown) =>
           logger.error({ err, chatJid }, 'Remote control command error'),
         );
         return;
       }
-
-      // Email wildcard routing: if an email arrives for a sender that has no
-      // dedicated registered group, reroute to EMAIL_GROUP_JID so a single
-      // group can process all incoming emails.
-      if (
-        chatJid.startsWith('email:') &&
-        !registeredGroups[chatJid] &&
-        EMAIL_GROUP_JID &&
-        registeredGroups[EMAIL_GROUP_JID]
-      ) {
-        logger.debug(
-          { from: chatJid, to: EMAIL_GROUP_JID },
-          'Email wildcard routing: rerouting to default email group',
-        );
-        msg = { ...msg, chat_jid: EMAIL_GROUP_JID };
-        chatJid = EMAIL_GROUP_JID;
-      }
-
-      // Sender allowlist drop mode: discard messages from denied senders before storing
-      if (!msg.is_from_me && !msg.is_bot_message && registeredGroups[chatJid]) {
-        const cfg = loadSenderAllowlist();
-        if (
-          shouldDropMessage(chatJid, cfg) &&
-          !isSenderAllowed(chatJid, msg.sender, cfg)
-        ) {
-          if (cfg.logDenied) {
-            logger.debug(
-              { chatJid, sender: msg.sender },
-              'sender-allowlist: dropping message (drop mode)',
-            );
-          }
-          return;
-        }
-      }
-      // Email attachment handling: copy temp files into the target group folder
-      // so the agent container can access them at /workspace/group/attachments/
-      if (msg.emailAttachments && msg.emailAttachments.length > 0) {
-        const groupFolder = registeredGroups[chatJid]?.folder;
-        if (groupFolder) {
-          const attDir = path.join(GROUPS_DIR, groupFolder, 'attachments');
-          fs.mkdirSync(attDir, { recursive: true });
-
-          let updatedContent = msg.content;
-          for (const att of msg.emailAttachments) {
-            const destFilename = `email-${Date.now()}-${att.filename}`;
-            const destPath = path.join(attDir, destFilename);
-            try {
-              fs.copyFileSync(att.tempPath, destPath);
-              // Rewrite placeholder with the container-accessible path
-              updatedContent = updatedContent.replace(
-                `tempPath="${att.tempPath}"`,
-                `path="/workspace/group/attachments/${destFilename}"`,
-              );
-              logger.info(
-                { groupFolder, filename: destFilename },
-                'Email attachment copied to group folder',
-              );
-            } catch (err) {
-              logger.warn(
-                { err, src: att.tempPath },
-                'Failed to copy email attachment',
-              );
-            }
-          }
-          msg = { ...msg, content: updatedContent };
-        }
-      }
-
-      storeMessage(msg);
+      handleIncomingMessage(chatJid, msg);
     },
     onChatMetadata: (
       chatJid: string,
@@ -727,32 +744,14 @@ async function main(): Promise<void> {
     },
   });
   startIpcWatcher({
-    sendMessage: (jid, text) => {
-      const channel = findChannel(channels, jid);
-      if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      return channel.sendMessage(jid, text);
-    },
-    sendPhoto: (jid, filePath, caption) => {
-      const channel = findChannel(channels, jid);
-      if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      if (!('sendPhoto' in channel))
-        throw new Error(`Channel for ${jid} does not support photos`);
-      return (channel as any).sendPhoto(jid, filePath, caption);
-    },
-    sendVideo: (jid, filePath, caption) => {
-      const channel = findChannel(channels, jid);
-      if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      if (!('sendVideo' in channel))
-        throw new Error(`Channel for ${jid} does not support video`);
-      return (channel as any).sendVideo(jid, filePath, caption);
-    },
-    sendDocument: (jid, filePath, caption) => {
-      const channel = findChannel(channels, jid);
-      if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      if (!('sendDocument' in channel))
-        throw new Error(`Channel for ${jid} does not support documents`);
-      return (channel as any).sendDocument(jid, filePath, caption);
-    },
+    sendMessage: (jid, text) =>
+      requireChannelMethod(jid, 'sendMessage')(jid, text),
+    sendPhoto: (jid, fp, cap) =>
+      requireChannelMethod(jid, 'sendPhoto')(jid, fp, cap),
+    sendVideo: (jid, fp, cap) =>
+      requireChannelMethod(jid, 'sendVideo')(jid, fp, cap),
+    sendDocument: (jid, fp, cap) =>
+      requireChannelMethod(jid, 'sendDocument')(jid, fp, cap),
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {
