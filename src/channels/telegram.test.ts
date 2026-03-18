@@ -612,7 +612,8 @@ describe('TelegramChannel', () => {
       };
 
       const originalFetch = global.fetch;
-      global.fetch = vi.fn()
+      global.fetch = vi
+        .fn()
         .mockResolvedValueOnce({
           arrayBuffer: () => Promise.resolve(new ArrayBuffer(100)),
         } as any)

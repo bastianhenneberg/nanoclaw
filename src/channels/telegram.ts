@@ -447,10 +447,16 @@ function setupBotHandlers(bot: Bot, opts: TelegramChannelOpts): void {
         const transcript = result.text?.trim();
         if (transcript) {
           content = `[Voice: ${transcript}]`;
-          logger.info({ chatJid, length: transcript.length }, 'Voice message transcribed');
+          logger.info(
+            { chatJid, length: transcript.length },
+            'Voice message transcribed',
+          );
         }
       } else {
-        logger.warn({ chatJid, status: whisperResp.status }, 'Whisper transcription failed');
+        logger.warn(
+          { chatJid, status: whisperResp.status },
+          'Whisper transcription failed',
+        );
       }
     } catch (err) {
       logger.error({ chatJid, err }, 'Failed to transcribe voice message');
