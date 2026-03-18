@@ -147,6 +147,68 @@ export async function sendPoolPhoto(
   }
 }
 
+/**
+ * Send a video via a pool bot assigned to the given sender name.
+ */
+export async function sendPoolVideo(
+  chatId: string,
+  filePath: string,
+  caption: string | undefined,
+  sender: string,
+  groupFolder: string,
+): Promise<void> {
+  const api = await getPoolApi(sender, groupFolder);
+  if (!api) return;
+
+  try {
+    const numericId = chatId.replace(/^tg:/, '');
+    await api.sendVideo(
+      numericId,
+      new InputFile(fs.createReadStream(filePath)),
+      {
+        caption: caption || undefined,
+      },
+    );
+    logger.info({ chatId, sender, filePath }, 'Pool video sent');
+  } catch (err) {
+    logger.error(
+      { chatId, sender, filePath, err },
+      'Failed to send pool video',
+    );
+  }
+}
+
+/**
+ * Send a document via a pool bot assigned to the given sender name.
+ */
+export async function sendPoolDocument(
+  chatId: string,
+  filePath: string,
+  caption: string | undefined,
+  sender: string,
+  groupFolder: string,
+): Promise<void> {
+  const api = await getPoolApi(sender, groupFolder);
+  if (!api) return;
+
+  try {
+    const numericId = chatId.replace(/^tg:/, '');
+    await api.sendDocument(
+      numericId,
+      new InputFile(fs.createReadStream(filePath)),
+      {
+        caption: caption || undefined,
+      },
+    );
+    logger.info({ chatId, sender, filePath }, 'Pool document sent');
+  } catch (err) {
+    logger.error(
+      { chatId, sender, filePath, err },
+      'Failed to send pool document',
+    );
+  }
+}
+
 // Store main bot reference for sendPhoto access
 let mainBotApi: Api | null = null;
 
@@ -552,6 +614,58 @@ export class TelegramChannel implements Channel {
       logger.info({ jid, filePath }, 'Telegram photo sent');
     } catch (err) {
       logger.error({ jid, filePath, err }, 'Failed to send Telegram photo');
+    }
+  }
+
+  async sendVideo(
+    jid: string,
+    filePath: string,
+    caption?: string,
+  ): Promise<void> {
+    const api = this.getApiForJid(jid);
+    if (!api) {
+      logger.warn('No Telegram bot available');
+      return;
+    }
+
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      await api.sendVideo(
+        numericId,
+        new InputFile(fs.createReadStream(filePath)),
+        {
+          caption: caption || undefined,
+        },
+      );
+      logger.info({ jid, filePath }, 'Telegram video sent');
+    } catch (err) {
+      logger.error({ jid, filePath, err }, 'Failed to send Telegram video');
+    }
+  }
+
+  async sendDocument(
+    jid: string,
+    filePath: string,
+    caption?: string,
+  ): Promise<void> {
+    const api = this.getApiForJid(jid);
+    if (!api) {
+      logger.warn('No Telegram bot available');
+      return;
+    }
+
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      await api.sendDocument(
+        numericId,
+        new InputFile(fs.createReadStream(filePath)),
+        {
+          caption: caption || undefined,
+        },
+      );
+      logger.info({ jid, filePath }, 'Telegram document sent');
+    } catch (err) {
+      logger.error({ jid, filePath, err }, 'Failed to send Telegram document');
     }
   }
 

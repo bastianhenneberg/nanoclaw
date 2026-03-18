@@ -50,12 +50,14 @@ const ACCOUNTS: LexofficeAccount[] = [
   {
     name: 'Crewtex',
     tag: 'Lexoffice CT',
-    apiKey: process.env.LEXOFFICE_CT_API_KEY || secrets.LEXOFFICE_CT_API_KEY || '',
+    apiKey:
+      process.env.LEXOFFICE_CT_API_KEY || secrets.LEXOFFICE_CT_API_KEY || '',
   },
   {
     name: 'Peppermint Digital',
     tag: 'Lexoffice PD',
-    apiKey: process.env.LEXOFFICE_PD_API_KEY || secrets.LEXOFFICE_PD_API_KEY || '',
+    apiKey:
+      process.env.LEXOFFICE_PD_API_KEY || secrets.LEXOFFICE_PD_API_KEY || '',
   },
 ];
 
@@ -168,7 +170,9 @@ export async function handlePaperlessWebhook(
   logger.info({ payload }, 'Paperless webhook: raw payload received');
 
   // Paperless-ngx may send document_id directly, or doc_url containing the ID
-  let docId = (payload.document_id ?? payload.id ?? payload.doc_id) as number | undefined;
+  let docId = (payload.document_id ?? payload.id ?? payload.doc_id) as
+    | number
+    | undefined;
 
   // Extract ID from doc_url if present (e.g. "http://paperless/documents/42/details")
   if (!docId && typeof payload.doc_url === 'string') {
@@ -177,11 +181,17 @@ export async function handlePaperlessWebhook(
   }
 
   if (!docId) {
-    return { ok: false, error: `Missing document_id in payload. Keys: ${Object.keys(payload).join(', ')}` };
+    return {
+      ok: false,
+      error: `Missing document_id in payload. Keys: ${Object.keys(payload).join(', ')}`,
+    };
   }
 
   if (!PAPERLESS_URL || !PAPERLESS_TOKEN) {
-    return { ok: false, error: 'PAPERLESS_API_URL or PAPERLESS_API_TOKEN not configured' };
+    return {
+      ok: false,
+      error: 'PAPERLESS_API_URL or PAPERLESS_API_TOKEN not configured',
+    };
   }
 
   logger.info({ docId }, 'Paperless webhook: processing document');
@@ -195,10 +205,7 @@ export async function handlePaperlessWebhook(
   // 2. Find matching Lexoffice account
   const account = ACCOUNTS.find((a) => tagNames.includes(a.tag));
   if (!account) {
-    logger.info(
-      { docId, tags: tagNames },
-      'No Lexoffice tag found, skipping',
-    );
+    logger.info({ docId, tags: tagNames }, 'No Lexoffice tag found, skipping');
     return {
       ok: true,
       documentId: docId,
@@ -246,9 +253,5 @@ export async function handlePaperlessWebhook(
  * Check if the Paperless-Lexoffice bridge is configured.
  */
 export function isPaperlessLexofficeEnabled(): boolean {
-  return !!(
-    PAPERLESS_URL &&
-    PAPERLESS_TOKEN &&
-    ACCOUNTS.some((a) => a.apiKey)
-  );
+  return !!(PAPERLESS_URL && PAPERLESS_TOKEN && ACCOUNTS.some((a) => a.apiKey));
 }

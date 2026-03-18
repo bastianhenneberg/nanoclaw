@@ -674,6 +674,20 @@ async function main(): Promise<void> {
         throw new Error(`Channel for ${jid} does not support photos`);
       return (channel as any).sendPhoto(jid, filePath, caption);
     },
+    sendVideo: (jid, filePath, caption) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      if (!('sendVideo' in channel))
+        throw new Error(`Channel for ${jid} does not support video`);
+      return (channel as any).sendVideo(jid, filePath, caption);
+    },
+    sendDocument: (jid, filePath, caption) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      if (!('sendDocument' in channel))
+        throw new Error(`Channel for ${jid} does not support documents`);
+      return (channel as any).sendDocument(jid, filePath, caption);
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {

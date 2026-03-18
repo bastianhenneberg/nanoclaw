@@ -374,7 +374,12 @@ class EmailChannel implements Channel {
       const textParts: string[] = [];
       const attachmentParts: MimePart[] = [];
       const htmlParts: string[] = [];
-      walkBodyStructure(msg.bodyStructure, textParts, attachmentParts, htmlParts);
+      walkBodyStructure(
+        msg.bodyStructure,
+        textParts,
+        attachmentParts,
+        htmlParts,
+      );
       pending.push({
         uid,
         senderAddress,
@@ -424,7 +429,9 @@ class EmailChannel implements Channel {
             if (dl?.content) {
               const chunks: Buffer[] = [];
               for await (const chunk of dl.content) {
-                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+                chunks.push(
+                  Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
+                );
               }
               body += htmlToPlainText(Buffer.concat(chunks).toString('utf-8'));
             }
@@ -646,28 +653,30 @@ function walkBodyStructure(
 
 /** Strip HTML tags and decode common entities to produce readable plain text. */
 function htmlToPlainText(html: string): string {
-  return html
-    // Remove style/script blocks entirely
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    // Line breaks for block elements
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|tr|li|h[1-6])>/gi, '\n')
-    .replace(/<\/(td|th)>/gi, '\t')
-    // Strip remaining tags
-    .replace(/<[^>]+>/g, '')
-    // Decode common HTML entities
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&#(\d+);/g, (_m, code) => String.fromCharCode(Number(code)))
-    // Collapse whitespace
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  return (
+    html
+      // Remove style/script blocks entirely
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      // Line breaks for block elements
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|tr|li|h[1-6])>/gi, '\n')
+      .replace(/<\/(td|th)>/gi, '\t')
+      // Strip remaining tags
+      .replace(/<[^>]+>/g, '')
+      // Decode common HTML entities
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/&#(\d+);/g, (_m, code) => String.fromCharCode(Number(code)))
+      // Collapse whitespace
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  );
 }
 
 function sanitizeFilename(name: string): string {
@@ -772,7 +781,12 @@ export async function listEmails(params: ListEmailsParams): Promise<string> {
       const textParts: string[] = [];
       const htmlParts: string[] = [];
       const attachParts: MimePart[] = [];
-      walkBodyStructure(msgResult.bodyStructure, textParts, attachParts, htmlParts);
+      walkBodyStructure(
+        msgResult.bodyStructure,
+        textParts,
+        attachParts,
+        htmlParts,
+      );
 
       const partsToTry = textParts.length > 0 ? textParts : htmlParts;
       const isHtml = textParts.length === 0 && htmlParts.length > 0;
@@ -786,7 +800,9 @@ export async function listEmails(params: ListEmailsParams): Promise<string> {
             }
             bodyPreview += Buffer.concat(chunks).toString('utf-8');
           }
-        } catch { /* skip */ }
+        } catch {
+          /* skip */
+        }
       }
       if (isHtml && bodyPreview) {
         bodyPreview = htmlToPlainText(bodyPreview);
@@ -799,7 +815,9 @@ export async function listEmails(params: ListEmailsParams): Promise<string> {
       lines.push(`   IMAP-UID: ${uid}`);
       lines.push(`   Message-ID: ${env.messageId || 'n/a'}`);
       if (bodyPreview) {
-        lines.push(`   Preview: ${bodyPreview.replace(/\n/g, ' ').slice(0, 200)}`);
+        lines.push(
+          `   Preview: ${bodyPreview.replace(/\n/g, ' ').slice(0, 200)}`,
+        );
       }
       lines.push('');
     }

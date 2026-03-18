@@ -103,6 +103,76 @@ server.tool(
 );
 
 server.tool(
+  'send_video',
+  'Send a video file to the user or group via Telegram. The file must exist on the container filesystem (e.g. in /workspace/group/, /workspace/extra/, or a generated file). Supports MP4, MOV, AVI, MKV and other common video formats.',
+  {
+    file_path: z.string().describe('Absolute path to the video file on the container filesystem'),
+    caption: z.string().optional().describe('Optional caption for the video'),
+    sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, video is sent from a dedicated bot in Telegram groups.'),
+    chat_jid: z.string().optional().describe('(Main group only) Target chat JID. Defaults to current chat.'),
+  },
+  async (args) => {
+    if (!fs.existsSync(args.file_path)) {
+      return {
+        content: [{ type: 'text' as const, text: `File not found: ${args.file_path}` }],
+        isError: true,
+      };
+    }
+
+    const targetJid = isMain && args.chat_jid ? args.chat_jid : chatJid;
+
+    const data: Record<string, string | undefined> = {
+      type: 'video',
+      chatJid: targetJid,
+      filePath: args.file_path,
+      caption: args.caption || undefined,
+      sender: args.sender || undefined,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: 'Video sent.' }] };
+  },
+);
+
+server.tool(
+  'send_document',
+  'Send a document/file to the user or group via Telegram. Use this for PDFs, spreadsheets, text files, ZIP archives, or any file that should be sent as a downloadable attachment (not as a photo or video). The file must exist on the container filesystem.',
+  {
+    file_path: z.string().describe('Absolute path to the file on the container filesystem'),
+    caption: z.string().optional().describe('Optional caption for the document'),
+    sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, document is sent from a dedicated bot in Telegram groups.'),
+    chat_jid: z.string().optional().describe('(Main group only) Target chat JID. Defaults to current chat.'),
+  },
+  async (args) => {
+    if (!fs.existsSync(args.file_path)) {
+      return {
+        content: [{ type: 'text' as const, text: `File not found: ${args.file_path}` }],
+        isError: true,
+      };
+    }
+
+    const targetJid = isMain && args.chat_jid ? args.chat_jid : chatJid;
+
+    const data: Record<string, string | undefined> = {
+      type: 'document',
+      chatJid: targetJid,
+      filePath: args.file_path,
+      caption: args.caption || undefined,
+      sender: args.sender || undefined,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: 'Document sent.' }] };
+  },
+);
+
+server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 

@@ -303,7 +303,11 @@ async function handlePaperlessRoute(
     const body = await readBody(req);
     const bodyStr = body.toString('utf-8');
     logger.info(
-      { contentType: req.headers['content-type'], bodyLength: body.length, bodyPreview: bodyStr.slice(0, 500) },
+      {
+        contentType: req.headers['content-type'],
+        bodyLength: body.length,
+        bodyPreview: bodyStr.slice(0, 500),
+      },
       'Paperless webhook: raw request',
     );
     if (body.length > 0) {
@@ -334,9 +338,11 @@ async function handlePaperlessRoute(
         } else {
           text = `Lexoffice Upload fehlgeschlagen: ${result.error}`;
         }
-        await deps.sendNotification(jid, text).catch((e) =>
-          logger.error({ err: e }, 'Failed to send Paperless notification'),
-        );
+        await deps
+          .sendNotification(jid, text)
+          .catch((e) =>
+            logger.error({ err: e }, 'Failed to send Paperless notification'),
+          );
       }
     }
   } catch (err) {
@@ -352,12 +358,17 @@ async function handlePaperlessRoute(
       const lexwareGroup = findGroupByFolder(groups, 'lexware');
       if (lexwareGroup) {
         const [jid] = lexwareGroup;
-        await deps.sendNotification(
-          jid,
-          `Lexoffice Upload Fehler: ${err instanceof Error ? err.message : 'Unbekannter Fehler'}`,
-        ).catch((e) =>
-          logger.error({ err: e }, 'Failed to send Paperless error notification'),
-        );
+        await deps
+          .sendNotification(
+            jid,
+            `Lexoffice Upload Fehler: ${err instanceof Error ? err.message : 'Unbekannter Fehler'}`,
+          )
+          .catch((e) =>
+            logger.error(
+              { err: e },
+              'Failed to send Paperless error notification',
+            ),
+          );
       }
     }
   }

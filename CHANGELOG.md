@@ -2,6 +2,12 @@
 
 All notable changes to NanoClaw will be documented in this file.
 
+## [1.5.0](https://github.com/qwibitai/nanoclaw/compare/v1.4.0...v1.5.0)
+
+- **feat:** Telegram video sending — `send_video` MCP tool + IPC type + channel method + pool bot support
+- **feat:** Telegram document sending — `send_document` MCP tool for PDFs, ZIPs, and any downloadable files
+- **feat:** Local TTS services integration (Qwen3-TTS, Chatterbox) with on-demand control API
+
 ## [1.4.0](https://github.com/qwibitai/nanoclaw/compare/v1.3.1...v1.4.0)
 
 - **feat:** IPC `list_emails` and `read_email` commands — agents can read emails from IMAP inboxes

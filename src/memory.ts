@@ -216,9 +216,7 @@ function readLocalMemoryContext(groupFolder: string): string {
 /**
  * Read memory context — tries AI Brain first, falls back to local files.
  */
-export async function readMemoryContext(
-  groupFolder: string,
-): Promise<string> {
+export async function readMemoryContext(groupFolder: string): Promise<string> {
   if (!MEMORY_ENABLED) return '';
 
   // Try AI Brain first

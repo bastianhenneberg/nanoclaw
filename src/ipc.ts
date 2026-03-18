@@ -4,7 +4,7 @@ import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, GROUPS_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
-import { sendPoolMessage, sendPoolPhoto } from './channels/telegram.js';
+import { sendPoolMessage, sendPoolPhoto, sendPoolVideo, sendPoolDocument } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
@@ -15,6 +15,8 @@ import { sendEmail } from './email-sender.js';
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
   sendPhoto: (jid: string, filePath: string, caption?: string) => Promise<void>;
+  sendVideo: (jid: string, filePath: string, caption?: string) => Promise<void>;
+  sendDocument: (jid: string, filePath: string, caption?: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -138,7 +140,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
               if (
                 data.chatJid &&
-                (data.type === 'message' || data.type === 'photo')
+                (data.type === 'message' || data.type === 'photo' || data.type === 'video' || data.type === 'document')
               ) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
@@ -191,6 +193,79 @@ export function startIpcWatcher(deps: IpcDeps): void {
                       },
                       'IPC photo sent',
                     );
+                  } else if (
+                    (data.type === 'video' || data.type === 'document') &&
+                    data.filePath &&
+                    data.chatJid.startsWith('tg:')
+                  ) {
+                    const hostFilePath = resolveHostPath(
+                      data.filePath,
+                      sourceGroup,
+                      registeredGroups,
+                    );
+                    if (!hostFilePath || !fs.existsSync(hostFilePath)) {
+                      logger.error(
+                        {
+                          containerPath: data.filePath,
+                          hostFilePath,
+                          sourceGroup,
+                          type: data.type,
+                        },
+                        `${data.type} file not found on host`,
+                      );
+                    } else if (data.type === 'video') {
+                      if (data.sender) {
+                        await sendPoolVideo(
+                          data.chatJid,
+                          hostFilePath,
+                          data.caption,
+                          data.sender,
+                          sourceGroup,
+                        );
+                      } else {
+                        await deps.sendVideo(
+                          data.chatJid,
+                          hostFilePath,
+                          data.caption,
+                        );
+                      }
+                      logger.info(
+                        {
+                          chatJid: data.chatJid,
+                          sourceGroup,
+                          sender: data.sender,
+                          containerPath: data.filePath,
+                          hostPath: hostFilePath,
+                        },
+                        'IPC video sent',
+                      );
+                    } else {
+                      if (data.sender) {
+                        await sendPoolDocument(
+                          data.chatJid,
+                          hostFilePath,
+                          data.caption,
+                          data.sender,
+                          sourceGroup,
+                        );
+                      } else {
+                        await deps.sendDocument(
+                          data.chatJid,
+                          hostFilePath,
+                          data.caption,
+                        );
+                      }
+                      logger.info(
+                        {
+                          chatJid: data.chatJid,
+                          sourceGroup,
+                          sender: data.sender,
+                          containerPath: data.filePath,
+                          hostPath: hostFilePath,
+                        },
+                        'IPC document sent',
+                      );
+                    }
                   } else if (data.type === 'message' && data.text) {
                     // Text message
                     if (data.sender && data.chatJid.startsWith('tg:')) {
