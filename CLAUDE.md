@@ -33,26 +33,26 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
 | `/shorts` | Generate YouTube Shorts/TikTok videos with AI voiceover (ElevenLabs, Qwen3-TTS, Chatterbox) |
 
-## Local TTS Services
+## Local TTS & Whisper Services
 
 Running on omarchy (from Docker containers use `host.docker.internal`):
 - **Qwen3-TTS** (Port 8090): 10 languages, 9 voices, free
 - **Chatterbox** (Port 8091): Voice cloning, emotion control
+- **Whisper** (Port 8092): Transcription & word-level timestamps
 - **Control API** (Port 8089): Start/stop services on demand
 
 ### Start Services On-Demand
 
-Services are OFF by default to save GPU memory. Start them when needed:
+TTS services are OFF by default to save GPU memory. Whisper runs always.
 
 ```bash
 # Check status
 curl http://host.docker.internal:8089/status
 
-# Start Qwen3 (wait ~10s for model load)
+# Start TTS (wait ~10-15s for model load)
 curl -X POST http://host.docker.internal:8089/qwen3/start
-
-# Start Chatterbox (wait ~15s for model load)
 curl -X POST http://host.docker.internal:8089/chatterbox/start
+curl -X POST http://host.docker.internal:8089/whisper/start
 
 # Stop when done
 curl -X POST http://host.docker.internal:8089/qwen3/stop
@@ -71,6 +71,23 @@ curl -X POST http://host.docker.internal:8090/tts \
 curl -X POST http://host.docker.internal:8091/tts \
   -H "Content-Type: application/json" \
   -d '{"text":"Hello"}' -o speech.wav
+```
+
+### Whisper Transcription & Timestamps
+
+```bash
+# Transcribe audio
+curl -X POST http://host.docker.internal:8092/transcribe \
+  -F "audio=@voice.wav" | jq .
+
+# Get word-level timestamps (for subtitle sync)
+curl -X POST http://host.docker.internal:8092/timestamps \
+  -F "audio=@speech.wav" | jq .
+
+# Forced alignment (text + audio)
+curl -X POST http://host.docker.internal:8092/align \
+  -F "audio=@speech.wav" \
+  -F "text=Your script text here" | jq .
 ```
 
 ## Development
