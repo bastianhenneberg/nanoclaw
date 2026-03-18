@@ -289,22 +289,35 @@ async function flushSessionMemory(
   const truncMsg = userMessage.slice(0, 2000);
   const truncResp = agentResponse.slice(0, 3000);
 
-  let facts: string;
-  try {
-    const result = await callLlm({
-      system: FLUSH_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content: `Extract memorable facts from this exchange:\n\nUSER: ${truncMsg}\n\nASSISTANT: ${truncResp}`,
-        },
-      ],
-      maxTokens: 400,
-    });
-    facts = result.text.trim();
-  } catch (err) {
-    logger.warn({ groupFolder, err }, 'Memory flush LLM call failed');
-    return;
+  let facts = '';
+  const MAX_RETRIES = 2;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const result = await callLlm({
+        system: FLUSH_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: 'user',
+            content: `Extract memorable facts from this exchange:\n\nUSER: ${truncMsg}\n\nASSISTANT: ${truncResp}`,
+          },
+        ],
+        maxTokens: 400,
+      });
+      facts = result.text.trim();
+      break;
+    } catch (err) {
+      if (attempt < MAX_RETRIES) {
+        const delayMs = (attempt + 1) * 5000; // 5s, 10s
+        logger.warn(
+          { groupFolder, attempt: attempt + 1, delayMs },
+          'Memory flush LLM call failed, retrying...',
+        );
+        await new Promise((r) => setTimeout(r, delayMs));
+      } else {
+        logger.warn({ groupFolder, err }, 'Memory flush LLM call failed after retries');
+        return;
+      }
+    }
   }
 
   if (!facts || facts.toUpperCase() === 'NOTHING') {
