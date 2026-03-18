@@ -31,6 +31,47 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 | `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
+| `/shorts` | Generate YouTube Shorts/TikTok videos with AI voiceover (ElevenLabs, Qwen3-TTS, Chatterbox) |
+
+## Local TTS Services
+
+Running on omarchy (from Docker containers use `host.docker.internal`):
+- **Qwen3-TTS** (Port 8090): 10 languages, 9 voices, free
+- **Chatterbox** (Port 8091): Voice cloning, emotion control
+- **Control API** (Port 8089): Start/stop services on demand
+
+### Start Services On-Demand
+
+Services are OFF by default to save GPU memory. Start them when needed:
+
+```bash
+# Check status
+curl http://host.docker.internal:8089/status
+
+# Start Qwen3 (wait ~10s for model load)
+curl -X POST http://host.docker.internal:8089/qwen3/start
+
+# Start Chatterbox (wait ~15s for model load)
+curl -X POST http://host.docker.internal:8089/chatterbox/start
+
+# Stop when done
+curl -X POST http://host.docker.internal:8089/qwen3/stop
+curl -X POST http://host.docker.internal:8089/chatterbox/stop
+```
+
+### Generate TTS
+
+```bash
+# Qwen3-TTS
+curl -X POST http://host.docker.internal:8090/tts \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hello","speaker":"ryan","language":"english"}' -o speech.wav
+
+# Chatterbox
+curl -X POST http://host.docker.internal:8091/tts \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hello"}' -o speech.wav
+```
 
 ## Development
 
