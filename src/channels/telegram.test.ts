@@ -73,6 +73,8 @@ import { TelegramChannel, TelegramChannelOpts } from './telegram.js';
 
 // --- Test helpers ---
 
+let nextMessageId = 1000;
+
 function createTestOpts(
   overrides?: Partial<TelegramChannelOpts>,
 ): TelegramChannelOpts {
@@ -119,7 +121,7 @@ function createTextCtx(overrides: {
     message: {
       text: overrides.text,
       date: overrides.date ?? Math.floor(Date.now() / 1000),
-      message_id: overrides.messageId ?? 1,
+      message_id: overrides.messageId ?? nextMessageId++,
       entities: overrides.entities ?? [],
     },
     me: { username: 'andy_ai_bot' },
@@ -151,7 +153,7 @@ function createMediaCtx(overrides: {
     },
     message: {
       date: overrides.date ?? Math.floor(Date.now() / 1000),
-      message_id: overrides.messageId ?? 1,
+      message_id: overrides.messageId ?? nextMessageId++,
       caption: overrides.caption,
       ...(overrides.extra || {}),
     },
@@ -267,7 +269,7 @@ describe('TelegramChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
         expect.objectContaining({
-          id: '1',
+          id: expect.any(String),
           chat_jid: 'tg:100200300',
           sender: '99001',
           sender_name: 'Alice',
@@ -541,12 +543,18 @@ describe('TelegramChannel', () => {
   // --- Non-text messages ---
 
   describe('non-text messages', () => {
-    it('stores photo with placeholder', async () => {
+    it('stores photo with fallback on download error', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel(['test-token'], opts);
       await channel.connect();
 
-      const ctx = createMediaCtx({});
+      const ctx = createMediaCtx({
+        extra: { photo: [{ file_id: 'photo-sm' }, { file_id: 'photo-lg' }] },
+      });
+      (ctx as any).api = {
+        getFile: vi.fn().mockRejectedValue(new Error('download failed')),
+      };
+
       await triggerMediaMessage('message:photo', ctx);
 
       expect(opts.onMessage).toHaveBeenCalledWith(
@@ -555,12 +563,19 @@ describe('TelegramChannel', () => {
       );
     });
 
-    it('stores photo with caption', async () => {
+    it('stores photo with caption on download error', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel(['test-token'], opts);
       await channel.connect();
 
-      const ctx = createMediaCtx({ caption: 'Look at this' });
+      const ctx = createMediaCtx({
+        caption: 'Look at this',
+        extra: { photo: [{ file_id: 'photo-sm' }, { file_id: 'photo-lg' }] },
+      });
+      (ctx as any).api = {
+        getFile: vi.fn().mockRejectedValue(new Error('download failed')),
+      };
+
       await triggerMediaMessage('message:photo', ctx);
 
       expect(opts.onMessage).toHaveBeenCalledWith(
@@ -583,12 +598,50 @@ describe('TelegramChannel', () => {
       );
     });
 
-    it('stores voice message with placeholder', async () => {
+    it('transcribes voice message via Whisper', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel(['test-token'], opts);
       await channel.connect();
 
-      const ctx = createMediaCtx({});
+      const ctx = createMediaCtx({
+        extra: { voice: { file_id: 'voice-file-123' } },
+      });
+      // Add api mock for file download
+      (ctx as any).api = {
+        getFile: vi.fn().mockResolvedValue({ file_path: 'voice/file.ogg' }),
+      };
+
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn()
+        .mockResolvedValueOnce({
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(100)),
+        } as any)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ text: 'Hello from voice' }),
+        } as any);
+
+      await triggerMediaMessage('message:voice', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({ content: '[Voice: Hello from voice]' }),
+      );
+      global.fetch = originalFetch;
+    });
+
+    it('falls back to placeholder when transcription fails', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel(['test-token'], opts);
+      await channel.connect();
+
+      const ctx = createMediaCtx({
+        extra: { voice: { file_id: 'voice-file-123' } },
+      });
+      (ctx as any).api = {
+        getFile: vi.fn().mockRejectedValue(new Error('download failed')),
+      };
+
       await triggerMediaMessage('message:voice', ctx);
 
       expect(opts.onMessage).toHaveBeenCalledWith(

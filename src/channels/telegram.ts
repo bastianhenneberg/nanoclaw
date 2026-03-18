@@ -412,7 +412,60 @@ function setupBotHandlers(bot: Bot, opts: TelegramChannelOpts): void {
     });
   });
   bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-  bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
+  bot.on('message:voice', async (ctx) => {
+    if (!dedup(ctx.message.message_id.toString())) return;
+    const chatJid = `tg:${ctx.chat.id}`;
+    const group = opts.registeredGroups()[chatJid];
+    if (!group) return;
+
+    const timestamp = new Date(ctx.message.date * 1000).toISOString();
+    const senderName =
+      ctx.from?.first_name ||
+      ctx.from?.username ||
+      ctx.from?.id?.toString() ||
+      'Unknown';
+    const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+    opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+    jidBotMap.set(chatJid, ctx.api);
+
+    let content = '[Voice message]';
+    try {
+      const file = await ctx.api.getFile(ctx.message.voice.file_id);
+      const url = `https://api.telegram.org/file/bot${bot.token}/${file.file_path}`;
+      const resp = await fetch(url);
+      const buffer = Buffer.from(await resp.arrayBuffer());
+
+      const formData = new FormData();
+      formData.append('audio', new Blob([buffer]), 'voice.ogg');
+      const whisperResp = await fetch('http://localhost:8092/transcribe', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (whisperResp.ok) {
+        const result = (await whisperResp.json()) as { text?: string };
+        const transcript = result.text?.trim();
+        if (transcript) {
+          content = `[Voice: ${transcript}]`;
+          logger.info({ chatJid, length: transcript.length }, 'Voice message transcribed');
+        }
+      } else {
+        logger.warn({ chatJid, status: whisperResp.status }, 'Whisper transcription failed');
+      }
+    } catch (err) {
+      logger.error({ chatJid, err }, 'Failed to transcribe voice message');
+    }
+
+    opts.onMessage(chatJid, {
+      id: ctx.message.message_id.toString(),
+      chat_jid: chatJid,
+      sender: ctx.from?.id?.toString() || '',
+      sender_name: senderName,
+      content,
+      timestamp,
+      is_from_me: false,
+    });
+  });
   bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
   bot.on('message:document', async (ctx) => {
     if (!dedup(ctx.message.message_id.toString())) return;
