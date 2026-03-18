@@ -2,6 +2,12 @@
 
 All notable changes to NanoClaw will be documented in this file.
 
+## [1.6.0](https://github.com/qwibitai/nanoclaw/compare/v1.5.1...v1.6.0)
+
+- **feat:** Telegram voice message transcription — auto-download OGG, transcribe via local Whisper (port 8092), inject `[Voice: ...]` into chat context
+- **fix:** Telegram test suite — 27 tests fixed by resolving `seenMessages` dedup state leak across tests (auto-incrementing messageId)
+- **merge:** Upstream remote-control feature integrated
+
 ## [1.5.1](https://github.com/qwibitai/nanoclaw/compare/v1.5.0...v1.5.1)
 
 - **refactor:** Extract `sendMediaFile()` + `dispatchIpcMessage()` helpers in IPC — deduplicate 4x repeated media send pattern
