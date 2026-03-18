@@ -319,12 +319,18 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
+  // Collect streamed results for memory flush (streaming mode returns result: null)
+  const streamedResults: string[] = [];
+
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
         if (output.newSessionId) {
           sessions[group.folder] = output.newSessionId;
           setSession(group.folder, output.newSessionId);
+        }
+        if (output.result) {
+          streamedResults.push(output.result);
         }
         await onOutput(output);
       }
@@ -365,8 +371,10 @@ async function runAgent(
 
     // After a successful session, distill memorable facts into memory storage.
     // Runs fire-and-forget so it never blocks the response.
-    if (output.result) {
-      scheduleMemoryFlush(group.folder, prompt, output.result);
+    // In streaming mode output.result is null — use collected streamed results instead.
+    const agentResult = output.result || streamedResults.join('\n\n');
+    if (agentResult) {
+      scheduleMemoryFlush(group.folder, prompt, agentResult);
     }
 
     return 'success';

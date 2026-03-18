@@ -4,7 +4,12 @@ import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, GROUPS_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
-import { sendPoolMessage, sendPoolPhoto, sendPoolVideo, sendPoolDocument } from './channels/telegram.js';
+import {
+  sendPoolMessage,
+  sendPoolPhoto,
+  sendPoolVideo,
+  sendPoolDocument,
+} from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
@@ -16,7 +21,11 @@ export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
   sendPhoto: (jid: string, filePath: string, caption?: string) => Promise<void>;
   sendVideo: (jid: string, filePath: string, caption?: string) => Promise<void>;
-  sendDocument: (jid: string, filePath: string, caption?: string) => Promise<void>;
+  sendDocument: (
+    jid: string,
+    filePath: string,
+    caption?: string,
+  ) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -140,7 +149,10 @@ export function startIpcWatcher(deps: IpcDeps): void {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
               if (
                 data.chatJid &&
-                (data.type === 'message' || data.type === 'photo' || data.type === 'video' || data.type === 'document')
+                (data.type === 'message' ||
+                  data.type === 'photo' ||
+                  data.type === 'video' ||
+                  data.type === 'document')
               ) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
