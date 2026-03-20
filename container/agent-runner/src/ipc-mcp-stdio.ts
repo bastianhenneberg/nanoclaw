@@ -597,6 +597,133 @@ server.tool(
 );
 
 server.tool(
+  'read_email',
+  `Read the full content of a specific email by IMAP UID. Returns the complete body text and attachment information.
+Use this when you need to see the full email content (not just the preview from list_emails).`,
+  {
+    account: z.string().describe('Email account address (e.g., "info@crewtex.de")'),
+    uid: z.number().describe('IMAP UID of the email (from list_emails output)'),
+    folder: z.string().optional().describe('IMAP folder (default: "INBOX")'),
+  },
+  async (args) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const data = {
+      type: 'read_email',
+      account: args.account,
+      uid: args.uid,
+      folder: args.folder || 'INBOX',
+      groupFolder,
+      requestId,
+      timestamp: new Date().toISOString(),
+    };
+
+    const requestFile = path.join(TASKS_DIR, `${requestId}.json`);
+    const responseFile = path.join(IPC_DIR, 'responses', `${requestId}.json`);
+
+    fs.mkdirSync(path.join(IPC_DIR, 'responses'), { recursive: true });
+    fs.writeFileSync(requestFile, JSON.stringify(data));
+
+    // Poll for response (max 30 seconds — downloading attachments can take time)
+    const maxWait = 30000;
+    const pollInterval = 200;
+    let waited = 0;
+
+    while (waited < maxWait) {
+      if (fs.existsSync(responseFile)) {
+        const response = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
+        fs.unlinkSync(responseFile);
+
+        if (response.error) {
+          return { content: [{ type: 'text' as const, text: `Error: ${response.error}` }], isError: true };
+        }
+
+        const email = response.result;
+        const lines = [
+          `📧 Email Details`,
+          `From: ${email.from}`,
+          `To: ${email.to}`,
+          `Subject: ${email.subject}`,
+          `Date: ${email.date}`,
+          `Message-ID: ${email.messageId}`,
+          '',
+          '--- Body ---',
+          email.body,
+        ];
+
+        if (email.attachments && email.attachments.length > 0) {
+          lines.push('', `--- Attachments (${email.attachments.length}) ---`);
+          for (const att of email.attachments) {
+            lines.push(`[ATTACHMENT name="${att.filename}" type="${att.mimeType}" size="${att.size}" tempPath="${att.tempPath}"]`);
+          }
+        }
+
+        return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+      }
+      await new Promise(r => setTimeout(r, pollInterval));
+      waited += pollInterval;
+    }
+
+    return { content: [{ type: 'text' as const, text: 'Timeout waiting for email content' }], isError: true };
+  },
+);
+
+server.tool(
+  'forward_email',
+  `Forward an email (with attachments) to another recipient. Fetches the original email by IMAP UID and sends it as a forward via SMTP.
+IMPORTANT: Always confirm with the user before forwarding!`,
+  {
+    account: z.string().describe('Email account address to forward from (e.g., "info@crewtex.de")'),
+    uid: z.number().describe('IMAP UID of the email to forward (from list_emails output)'),
+    to: z.union([z.string(), z.array(z.string())]).describe('Recipient email address(es)'),
+    folder: z.string().optional().describe('IMAP folder (default: "INBOX")'),
+    comment: z.string().optional().describe('Optional comment to prepend above the forwarded message'),
+  },
+  async (args) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const data = {
+      type: 'forward_email',
+      account: args.account,
+      uid: args.uid,
+      to: args.to,
+      folder: args.folder || 'INBOX',
+      comment: args.comment,
+      groupFolder,
+      requestId,
+      timestamp: new Date().toISOString(),
+    };
+
+    const requestFile = path.join(TASKS_DIR, `${requestId}.json`);
+    const responseFile = path.join(IPC_DIR, 'responses', `${requestId}.json`);
+
+    fs.mkdirSync(path.join(IPC_DIR, 'responses'), { recursive: true });
+    fs.writeFileSync(requestFile, JSON.stringify(data));
+
+    // Poll for response (max 60 seconds — downloading + sending can take time)
+    const maxWait = 60000;
+    const pollInterval = 300;
+    let waited = 0;
+
+    while (waited < maxWait) {
+      if (fs.existsSync(responseFile)) {
+        const response = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
+        fs.unlinkSync(responseFile);
+
+        if (response.error) {
+          return { content: [{ type: 'text' as const, text: `Error: ${response.error}` }], isError: true };
+        }
+
+        const recipients = Array.isArray(args.to) ? args.to.join(', ') : args.to;
+        return { content: [{ type: 'text' as const, text: `✅ ${response.result}\nForwarded to: ${recipients}` }] };
+      }
+      await new Promise(r => setTimeout(r, pollInterval));
+      waited += pollInterval;
+    }
+
+    return { content: [{ type: 'text' as const, text: 'Timeout waiting for forward to complete' }], isError: true };
+  },
+);
+
+server.tool(
   'email_action',
   `Perform an action on an email in the inbox. Use this to delete or archive emails after the user confirms.
 IMPORTANT: Always ask the user for confirmation before deleting emails!`,

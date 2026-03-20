@@ -36,6 +36,11 @@ function findAccount(accountAddress?: string): EmailAccountConfig | null {
   return accounts.find((a) => a.smtpHost) || null;
 }
 
+export async function buildSmtpTransport(cfg: EmailAccountConfig) {
+  const config = await buildTransportConfig(cfg);
+  return createTransport(config);
+}
+
 async function buildTransportConfig(cfg: EmailAccountConfig): Promise<object> {
   if (cfg.authType === 'oauth2') {
     const tokenMgr = new MicrosoftTokenManager({

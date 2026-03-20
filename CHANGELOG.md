@@ -2,6 +2,15 @@
 
 All notable changes to NanoClaw will be documented in this file.
 
+## [1.7.0](https://github.com/qwibitai/nanoclaw/compare/v1.6.0...v1.7.0)
+
+- **feat:** `read_email` MCP tool — agents can read full email body + attachments by IMAP UID
+- **feat:** `forward_email` MCP tool — agents can forward emails with original attachments via SMTP
+- **fix:** Agent memory system — switch `callClaude()` to Agent SDK for OAuth-compatible LLM calls, add raw fallback on failure
+- **fix:** `walkBodyStructure` MIME type parsing — ImapFlow returns `"text/plain"` combined, not split `type`/`subtype`. This caused empty email bodies in all tools.
+- **refactor:** `createImapClient()` shared helper for IMAP connection setup
+- **refactor:** `buildSmtpTransport()` exported from email-sender for reuse
+
 ## [1.6.0](https://github.com/qwibitai/nanoclaw/compare/v1.5.1...v1.6.0)
 
 - **feat:** Telegram voice message transcription — auto-download OGG, transcribe via local Whisper (port 8092), inject `[Voice: ...]` into chat context

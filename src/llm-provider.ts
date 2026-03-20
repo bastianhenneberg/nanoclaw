@@ -158,7 +158,11 @@ async function callClaude(req: LlmRequest): Promise<LlmResponse> {
 
     for await (const message of messages) {
       if (message.type === 'assistant' && 'message' in message) {
-        const content = (message as { message: { content: Array<{ type: string; text?: string }> } }).message.content;
+        const content = (
+          message as {
+            message: { content: Array<{ type: string; text?: string }> };
+          }
+        ).message.content;
         for (const block of content) {
           if (block.type === 'text' && block.text) {
             resultText += block.text;

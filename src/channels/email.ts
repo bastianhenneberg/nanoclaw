@@ -627,8 +627,11 @@ function walkBodyStructure(
     return;
   }
 
-  const type = (node.type || '').toLowerCase();
-  const subtype = (node.subtype || '').toLowerCase();
+  // ImapFlow may return type as "text/plain" (combined) or as separate type/subtype
+  const rawType = (node.type || '').toLowerCase();
+  const [type, subtype] = rawType.includes('/')
+    ? rawType.split('/')
+    : [rawType, (node.subtype || '').toLowerCase()];
   const disposition = (node.disposition || '').toLowerCase();
   const partNum = node.part || '1';
   const mimeType = `${type}/${subtype}`;
@@ -690,6 +693,41 @@ function sanitizeFilename(name: string): string {
     .replace(/[/\\:*?"<>|]/g, '_')
     .replace(/^\.+/, '_')
     .slice(0, 200);
+}
+
+// ── Shared IMAP client factory ────────────────────────────────────────────────
+
+async function createImapClient(accountAddress: string): Promise<{ client: ImapFlow; cfg: EmailAccountConfig }> {
+  const accounts = parseEmailAccounts();
+  const cfg = accounts.find(
+    (a) => a.address.toLowerCase() === accountAddress.toLowerCase(),
+  );
+  if (!cfg) throw new Error(`Account not found: ${accountAddress}`);
+
+  const imapConfig: any = {
+    host: cfg.imapHost,
+    port: cfg.imapPort,
+    secure: cfg.imapUseSSL,
+    logger: false,
+  };
+
+  if (cfg.authType === 'oauth2') {
+    const tokenMgr = new MicrosoftTokenManager({
+      tenantId: cfg.oauth2TenantId,
+      clientId: cfg.oauth2ClientId,
+      clientSecret: cfg.oauth2ClientSecret,
+      grantType: cfg.oauth2GrantType,
+      refreshToken: cfg.oauth2RefreshToken || undefined,
+    });
+    const token = await tokenMgr.getAccessToken();
+    imapConfig.auth = { user: cfg.address, accessToken: token };
+  } else {
+    imapConfig.auth = { user: cfg.address, pass: cfg.password };
+  }
+
+  const client = new ImapFlow(imapConfig);
+  await client.connect();
+  return { client, cfg };
 }
 
 // ── Email listing API (for IPC) ───────────────────────────────────────────────
@@ -1037,6 +1075,202 @@ export async function performEmailAction(
         await client.logout();
       } catch {}
     }
+    return false;
+  }
+}
+
+// ── Read full email (for IPC) ─────────────────────────────────────────────────
+
+export interface ReadEmailParams {
+  account: string;
+  uid: number;
+  folder?: string;
+}
+
+export interface ReadEmailResult {
+  from: string;
+  to: string;
+  subject: string;
+  date: string;
+  messageId: string;
+  body: string;
+  attachments: Array<{ filename: string; mimeType: string; size: number; tempPath: string }>;
+}
+
+export async function readEmail(params: ReadEmailParams): Promise<ReadEmailResult> {
+  const { client, cfg } = await createImapClient(params.account);
+
+  try {
+    const folder = params.folder || cfg.imapMailbox;
+    await client.mailboxOpen(folder);
+
+    const uid = String(params.uid);
+    const msg = await client.fetchOne(
+      uid,
+      { envelope: true, bodyStructure: true, flags: true },
+      { uid: true },
+    );
+
+    if (!msg || typeof msg === 'boolean' || !msg.envelope) {
+      throw new Error(`Email UID ${params.uid} not found`);
+    }
+
+    const env = msg.envelope;
+
+    // Parse body parts
+    const textParts: string[] = [];
+    const htmlParts: string[] = [];
+    const attachParts: MimePart[] = [];
+    walkBodyStructure(msg.bodyStructure, textParts, attachParts, htmlParts);
+
+    // Download body
+    let body = '';
+    const partsToTry = textParts.length > 0 ? textParts : htmlParts;
+    const isHtml = textParts.length === 0 && htmlParts.length > 0;
+    for (const partNum of partsToTry) {
+      try {
+        const dl = await client.download(uid, partNum, { uid: true });
+        if (dl?.content) {
+          const chunks: Buffer[] = [];
+          for await (const chunk of dl.content) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          }
+          body += Buffer.concat(chunks).toString('utf-8');
+        }
+      } catch { /* skip broken part */ }
+    }
+    if (isHtml && body) {
+      body = htmlToPlainText(body);
+    }
+
+    // Download attachments to temp dir
+    const tmpDir = path.join(os.tmpdir(), `nanoclaw-email-${params.uid}-${Date.now()}`);
+    const attachments: ReadEmailResult['attachments'] = [];
+
+    for (const att of attachParts) {
+      try {
+        const dl = await client.download(uid, att.partNum, { uid: true });
+        if (dl?.content) {
+          fs.mkdirSync(tmpDir, { recursive: true });
+          const safeName = sanitizeFilename(att.filename);
+          const filePath = path.join(tmpDir, safeName);
+          const writeStream = createWriteStream(filePath);
+          await pipeline(dl.content, writeStream);
+          const stat = fs.statSync(filePath);
+          attachments.push({
+            filename: att.filename,
+            mimeType: att.mimeType,
+            size: stat.size,
+            tempPath: filePath,
+          });
+        }
+      } catch (err) {
+        logger.warn({ uid: params.uid, part: att.partNum, err }, 'Failed to download attachment');
+      }
+    }
+
+    await client.logout();
+
+    return {
+      from: env.from?.[0]?.address || 'unknown',
+      to: env.to?.map((a: any) => a.address).join(', ') || '',
+      subject: env.subject || '(no subject)',
+      date: env.date ? new Date(env.date).toISOString() : '',
+      messageId: env.messageId || '',
+      body: body.slice(0, 50000),
+      attachments,
+    };
+  } catch (err) {
+    try { await client.logout(); } catch {}
+    throw err;
+  }
+}
+
+// ── Forward email (for IPC) ──────────────────────────────────────────────────
+
+export interface ForwardEmailParams {
+  account: string;
+  uid: number;
+  to: string | string[];
+  folder?: string;
+  comment?: string;
+}
+
+export async function forwardEmail(params: ForwardEmailParams): Promise<boolean> {
+  // 1. Read the original email
+  const original = await readEmail({
+    account: params.account,
+    uid: params.uid,
+    folder: params.folder,
+  });
+
+  // 2. Build forwarded body
+  const forwardHeader = [
+    params.comment ? `${params.comment}\n\n` : '',
+    '---------- Forwarded message ----------',
+    `From: ${original.from}`,
+    `Date: ${original.date}`,
+    `Subject: ${original.subject}`,
+    `To: ${original.to}`,
+    '',
+  ].join('\n');
+
+  const forwardBody = forwardHeader + original.body;
+  const forwardSubject = original.subject.startsWith('Fwd:') || original.subject.startsWith('FW:')
+    ? original.subject
+    : `Fwd: ${original.subject}`;
+
+  // 3. Send via SMTP with attachments
+  const { sendEmail: sendEmailFn } = await import('../email-sender.js');
+
+  // Use nodemailer directly for attachment support
+  const accounts = parseEmailAccounts();
+  const cfg = accounts.find(
+    (a) => a.address.toLowerCase() === params.account.toLowerCase(),
+  );
+  if (!cfg || !cfg.smtpHost) {
+    throw new Error(`No SMTP config for account: ${params.account}`);
+  }
+
+  const { buildSmtpTransport } = await import('../email-sender.js');
+  const transport = await buildSmtpTransport(cfg);
+
+  const to = Array.isArray(params.to) ? params.to.join(', ') : params.to;
+
+  const mailOptions: any = {
+    from: cfg.fromAddress || cfg.address,
+    to,
+    subject: forwardSubject,
+    text: forwardBody,
+  };
+
+  // Attach downloaded files
+  if (original.attachments.length > 0) {
+    mailOptions.attachments = original.attachments.map((att) => ({
+      filename: att.filename,
+      path: att.tempPath,
+      contentType: att.mimeType,
+    }));
+  }
+
+  try {
+    await transport.sendMail(mailOptions);
+    logger.info(
+      { to, subject: forwardSubject, account: params.account, uid: params.uid },
+      'Email forwarded',
+    );
+
+    // Clean up temp attachment files
+    for (const att of original.attachments) {
+      try { fs.unlinkSync(att.tempPath); } catch {}
+    }
+
+    return true;
+  } catch (err) {
+    logger.error(
+      { err, to, subject: forwardSubject, account: params.account },
+      'Failed to forward email',
+    );
     return false;
   }
 }

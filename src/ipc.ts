@@ -393,6 +393,9 @@ export async function processTaskIpc(
     limit?: number;
     unreadOnly?: boolean;
     requestId?: string;
+    // For read_email / forward_email
+    uid?: number;
+    comment?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -740,6 +743,72 @@ export async function processTaskIpc(
           logger.error(
             { sourceGroup, account: data.account, err },
             'Error listing emails',
+          );
+        }
+      }
+      break;
+
+    case 'read_email':
+      // Read full email content by UID
+      if (data.account && data.uid && data.requestId) {
+        const responseDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'responses');
+        fs.mkdirSync(responseDir, { recursive: true });
+        const responseFile = path.join(responseDir, `${data.requestId}.json`);
+
+        try {
+          const { readEmail } = await import('./channels/email.js');
+          const result = await readEmail({
+            account: data.account as string,
+            uid: data.uid as number,
+            folder: (data.folder as string) || undefined,
+          });
+          fs.writeFileSync(responseFile, JSON.stringify({ result }));
+          logger.info(
+            { sourceGroup, account: data.account, uid: data.uid },
+            'Email read via IPC',
+          );
+        } catch (err) {
+          fs.writeFileSync(
+            responseFile,
+            JSON.stringify({ error: String(err) }),
+          );
+          logger.error(
+            { sourceGroup, account: data.account, uid: data.uid, err },
+            'Error reading email',
+          );
+        }
+      }
+      break;
+
+    case 'forward_email':
+      // Forward an email by UID
+      if (data.account && data.uid && data.to && data.requestId) {
+        const responseDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'responses');
+        fs.mkdirSync(responseDir, { recursive: true });
+        const responseFile = path.join(responseDir, `${data.requestId}.json`);
+
+        try {
+          const { forwardEmail } = await import('./channels/email.js');
+          const success = await forwardEmail({
+            account: data.account as string,
+            uid: data.uid as number,
+            to: data.to as string | string[],
+            folder: (data.folder as string) || undefined,
+            comment: (data.comment as string) || undefined,
+          });
+          fs.writeFileSync(responseFile, JSON.stringify({ result: success ? 'Email forwarded successfully' : 'Forward failed' }));
+          logger.info(
+            { sourceGroup, account: data.account, uid: data.uid, to: data.to, success },
+            'Email forward via IPC',
+          );
+        } catch (err) {
+          fs.writeFileSync(
+            responseFile,
+            JSON.stringify({ error: String(err) }),
+          );
+          logger.error(
+            { sourceGroup, account: data.account, uid: data.uid, err },
+            'Error forwarding email',
           );
         }
       }
