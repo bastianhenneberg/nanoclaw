@@ -1,4 +1,15 @@
 # Changelog
+## v1.3.1 (2026-03-20)
+
+### Command Center Integration
+- **API Endpoints**: Skills, Tasks, Health, Updates via webhook server
+- **Upstream Merge**: Security fixes, Docker timeout improvements from v1.2.19
+
+### Security
+- Stop logging user prompt content on container errors (upstream)
+
+### Improvements  
+- Faster container restarts via reduced Docker stop timeout (upstream)
 
 All notable changes to NanoClaw will be documented in this file.
 
