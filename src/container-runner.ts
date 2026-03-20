@@ -284,6 +284,12 @@ function buildContainerArgs(
     args.push('-e', `AI_BRAIN_TOKEN=${brainSecrets.AI_BRAIN_TOKEN}`);
   }
 
+  // Pass Peppermint Verwaltung token if configured
+  const verwaltungSecrets = readEnvFile(["VERWALTUNG_API_TOKEN"]);
+  if (verwaltungSecrets.VERWALTUNG_API_TOKEN) {
+    args.push("-e", `VERWALTUNG_API_TOKEN=${verwaltungSecrets.VERWALTUNG_API_TOKEN}`);
+  }
+
   // Pass Paperless-ngx credentials if configured
   const paperlessSecrets = readEnvFile([
     'PAPERLESS_API_TOKEN',

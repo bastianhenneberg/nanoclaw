@@ -458,6 +458,15 @@ async function runQuery(
         },
       },
     } : {}),
+    ...(process.env.VERWALTUNG_API_TOKEN ? {
+      'peppermint-verwaltung': {
+        type: 'http' as const,
+        url: 'https://vw.peppermint-digital.com/mcp/verwaltung',
+        headers: {
+          'Authorization': `Bearer ${process.env.VERWALTUNG_API_TOKEN}`,
+        },
+      },
+    } : {}),
   };
   log(`MCP servers configured: ${Object.keys(mcpServers).join(', ')}`);
   log(`AI_BRAIN_TOKEN set: ${!!process.env.AI_BRAIN_TOKEN}`);
@@ -482,7 +491,8 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__peppermint__*',
-        'mcp__ai-brain__*'
+        'mcp__ai-brain__*',
+        'mcp__peppermint-verwaltung__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',

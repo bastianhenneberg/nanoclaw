@@ -2,6 +2,12 @@
 
 All notable changes to NanoClaw will be documented in this file.
 
+## [1.7.1](https://github.com/qwibitai/nanoclaw/compare/v1.7.0...v1.7.1)
+
+- **feat:** Peppermint-Verwaltung MCP server — agents can now access Verwaltung tools (`peppermint-verwaltung`) via container
+- **fix:** Email account IDs added to henneberg (15), department (16), info (17) CLAUDE.md files for `attach-email-to-task-tool`
+- **chore:** Code formatting cleanup in email.ts, ipc.ts
+
 ## [1.7.0](https://github.com/qwibitai/nanoclaw/compare/v1.6.0...v1.7.0)
 
 - **feat:** `read_email` MCP tool — agents can read full email body + attachments by IMAP UID

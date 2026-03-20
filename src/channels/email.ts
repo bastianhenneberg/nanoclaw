@@ -697,7 +697,9 @@ function sanitizeFilename(name: string): string {
 
 // ── Shared IMAP client factory ────────────────────────────────────────────────
 
-async function createImapClient(accountAddress: string): Promise<{ client: ImapFlow; cfg: EmailAccountConfig }> {
+async function createImapClient(
+  accountAddress: string,
+): Promise<{ client: ImapFlow; cfg: EmailAccountConfig }> {
   const accounts = parseEmailAccounts();
   const cfg = accounts.find(
     (a) => a.address.toLowerCase() === accountAddress.toLowerCase(),
@@ -1094,10 +1096,17 @@ export interface ReadEmailResult {
   date: string;
   messageId: string;
   body: string;
-  attachments: Array<{ filename: string; mimeType: string; size: number; tempPath: string }>;
+  attachments: Array<{
+    filename: string;
+    mimeType: string;
+    size: number;
+    tempPath: string;
+  }>;
 }
 
-export async function readEmail(params: ReadEmailParams): Promise<ReadEmailResult> {
+export async function readEmail(
+  params: ReadEmailParams,
+): Promise<ReadEmailResult> {
   const { client, cfg } = await createImapClient(params.account);
 
   try {
@@ -1137,14 +1146,19 @@ export async function readEmail(params: ReadEmailParams): Promise<ReadEmailResul
           }
           body += Buffer.concat(chunks).toString('utf-8');
         }
-      } catch { /* skip broken part */ }
+      } catch {
+        /* skip broken part */
+      }
     }
     if (isHtml && body) {
       body = htmlToPlainText(body);
     }
 
     // Download attachments to temp dir
-    const tmpDir = path.join(os.tmpdir(), `nanoclaw-email-${params.uid}-${Date.now()}`);
+    const tmpDir = path.join(
+      os.tmpdir(),
+      `nanoclaw-email-${params.uid}-${Date.now()}`,
+    );
     const attachments: ReadEmailResult['attachments'] = [];
 
     for (const att of attachParts) {
@@ -1165,7 +1179,10 @@ export async function readEmail(params: ReadEmailParams): Promise<ReadEmailResul
           });
         }
       } catch (err) {
-        logger.warn({ uid: params.uid, part: att.partNum, err }, 'Failed to download attachment');
+        logger.warn(
+          { uid: params.uid, part: att.partNum, err },
+          'Failed to download attachment',
+        );
       }
     }
 
@@ -1181,7 +1198,9 @@ export async function readEmail(params: ReadEmailParams): Promise<ReadEmailResul
       attachments,
     };
   } catch (err) {
-    try { await client.logout(); } catch {}
+    try {
+      await client.logout();
+    } catch {}
     throw err;
   }
 }
@@ -1196,7 +1215,9 @@ export interface ForwardEmailParams {
   comment?: string;
 }
 
-export async function forwardEmail(params: ForwardEmailParams): Promise<boolean> {
+export async function forwardEmail(
+  params: ForwardEmailParams,
+): Promise<boolean> {
   // 1. Read the original email
   const original = await readEmail({
     account: params.account,
@@ -1216,9 +1237,10 @@ export async function forwardEmail(params: ForwardEmailParams): Promise<boolean>
   ].join('\n');
 
   const forwardBody = forwardHeader + original.body;
-  const forwardSubject = original.subject.startsWith('Fwd:') || original.subject.startsWith('FW:')
-    ? original.subject
-    : `Fwd: ${original.subject}`;
+  const forwardSubject =
+    original.subject.startsWith('Fwd:') || original.subject.startsWith('FW:')
+      ? original.subject
+      : `Fwd: ${original.subject}`;
 
   // 3. Send via SMTP with attachments
   const { sendEmail: sendEmailFn } = await import('../email-sender.js');
@@ -1262,7 +1284,9 @@ export async function forwardEmail(params: ForwardEmailParams): Promise<boolean>
 
     // Clean up temp attachment files
     for (const att of original.attachments) {
-      try { fs.unlinkSync(att.tempPath); } catch {}
+      try {
+        fs.unlinkSync(att.tempPath);
+      } catch {}
     }
 
     return true;

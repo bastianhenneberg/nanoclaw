@@ -751,7 +751,12 @@ export async function processTaskIpc(
     case 'read_email':
       // Read full email content by UID
       if (data.account && data.uid && data.requestId) {
-        const responseDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'responses');
+        const responseDir = path.join(
+          DATA_DIR,
+          'ipc',
+          sourceGroup,
+          'responses',
+        );
         fs.mkdirSync(responseDir, { recursive: true });
         const responseFile = path.join(responseDir, `${data.requestId}.json`);
 
@@ -783,7 +788,12 @@ export async function processTaskIpc(
     case 'forward_email':
       // Forward an email by UID
       if (data.account && data.uid && data.to && data.requestId) {
-        const responseDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'responses');
+        const responseDir = path.join(
+          DATA_DIR,
+          'ipc',
+          sourceGroup,
+          'responses',
+        );
         fs.mkdirSync(responseDir, { recursive: true });
         const responseFile = path.join(responseDir, `${data.requestId}.json`);
 
@@ -796,9 +806,22 @@ export async function processTaskIpc(
             folder: (data.folder as string) || undefined,
             comment: (data.comment as string) || undefined,
           });
-          fs.writeFileSync(responseFile, JSON.stringify({ result: success ? 'Email forwarded successfully' : 'Forward failed' }));
+          fs.writeFileSync(
+            responseFile,
+            JSON.stringify({
+              result: success
+                ? 'Email forwarded successfully'
+                : 'Forward failed',
+            }),
+          );
           logger.info(
-            { sourceGroup, account: data.account, uid: data.uid, to: data.to, success },
+            {
+              sourceGroup,
+              account: data.account,
+              uid: data.uid,
+              to: data.to,
+              success,
+            },
             'Email forward via IPC',
           );
         } catch (err) {
