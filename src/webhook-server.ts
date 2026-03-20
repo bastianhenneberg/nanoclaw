@@ -38,12 +38,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { WEBHOOK_SECRET } from './config.js';
-import {
-  getAllTasks,
-  getTaskById,
-  updateTask,
-  deleteTask,
-} from './db.js';
+import { getAllTasks, getTaskById, updateTask, deleteTask } from './db.js';
 import { callLlm, LlmProvider } from './llm-provider.js';
 import { logger } from './logger.js';
 import {
@@ -62,12 +57,17 @@ interface SkillInfo {
   path: string;
 }
 
-function parseSkillMd(content: string): { name?: string; description?: string; allowedTools?: string } {
+function parseSkillMd(content: string): {
+  name?: string;
+  description?: string;
+  allowedTools?: string;
+} {
   const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
   if (!frontmatterMatch) return {};
 
   const frontmatter = frontmatterMatch[1];
-  const result: { name?: string; description?: string; allowedTools?: string } = {};
+  const result: { name?: string; description?: string; allowedTools?: string } =
+    {};
 
   const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
   if (nameMatch) result.name = nameMatch[1].trim();
@@ -88,9 +88,10 @@ function getInstalledSkills(): SkillInfo[] {
     return skills;
   }
 
-  const dirs = fs.readdirSync(SKILLS_DIR, { withFileTypes: true })
-    .filter(d => d.isDirectory())
-    .map(d => d.name);
+  const dirs = fs
+    .readdirSync(SKILLS_DIR, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
 
   for (const dir of dirs) {
     const skillPath = path.join(SKILLS_DIR, dir, 'SKILL.md');
@@ -552,20 +553,32 @@ export function startWebhookServer(
           try {
             const raw = await readBody(req);
             if (raw.length > 0) {
-              body = JSON.parse(raw.toString('utf-8')) as Record<string, unknown>;
+              body = JSON.parse(raw.toString('utf-8')) as Record<
+                string,
+                unknown
+              >;
             }
           } catch {
             sendJson(res, 400, { ok: false, error: 'Invalid JSON body' });
             return;
           }
-          const updates: Partial<Pick<ScheduledTask, 'status' | 'prompt' | 'schedule_type' | 'schedule_value'>> = {};
+          const updates: Partial<
+            Pick<
+              ScheduledTask,
+              'status' | 'prompt' | 'schedule_type' | 'schedule_value'
+            >
+          > = {};
           if (body.status === 'active' || body.status === 'paused') {
             updates.status = body.status;
           }
           if (typeof body.prompt === 'string') {
             updates.prompt = body.prompt;
           }
-          if (body.schedule_type === 'cron' || body.schedule_type === 'interval' || body.schedule_type === 'once') {
+          if (
+            body.schedule_type === 'cron' ||
+            body.schedule_type === 'interval' ||
+            body.schedule_type === 'once'
+          ) {
             updates.schedule_type = body.schedule_type;
           }
           if (typeof body.schedule_value === 'string') {
