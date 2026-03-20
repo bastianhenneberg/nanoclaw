@@ -290,6 +290,7 @@ async function flushSessionMemory(
   const truncResp = agentResponse.slice(0, 3000);
 
   let facts = '';
+  let llmFailed = false;
   const MAX_RETRIES = 2;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
@@ -314,15 +315,23 @@ async function flushSessionMemory(
         );
         await new Promise((r) => setTimeout(r, delayMs));
       } else {
-        logger.warn({ groupFolder, err }, 'Memory flush LLM call failed after retries');
-        return;
+        logger.warn(
+          { groupFolder, err },
+          'Memory flush LLM call failed after retries — saving raw conversation as fallback',
+        );
+        llmFailed = true;
       }
     }
   }
 
-  if (!facts || facts.toUpperCase() === 'NOTHING') {
+  if (!llmFailed && (!facts || facts.toUpperCase().startsWith('NOTHING'))) {
     logger.debug({ groupFolder }, 'Memory flush: nothing to store');
     return;
+  }
+
+  // Fallback: store a compact summary of the raw conversation
+  if (llmFailed || !facts) {
+    facts = `• User: ${truncMsg.slice(0, 200)}\n• Assistant: ${truncResp.slice(0, 500)}`;
   }
 
   // Today's date in the user's local timezone (YYYY-MM-DD)

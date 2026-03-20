@@ -120,3 +120,8 @@ systemctl --user restart nanoclaw
 ## Container Build Cache
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
+
+## AI Brain
+Projekt-Slug: `nanoclaw`
+
+**Starte jede Session mit `/brain`** — lädt den Pflicht-Workflow für Kontext, Planung und Dokumentation.

@@ -2,7 +2,7 @@
  * LLM Provider Abstraction
  *
  * Supports two backends for direct (non-agent) LLM calls:
- *   - 'claude'  → Anthropic API via the local credential proxy
+ *   - 'claude'  → Claude Agent SDK via the local credential proxy
  *   - 'ollama'  → Ollama server (OpenAI-compatible /api/chat endpoint)
  *
  * Use this for lightweight, synchronous inference from the webhook server
@@ -12,6 +12,8 @@
 import { request as httpRequest } from 'http';
 import { request as httpsRequest } from 'https';
 
+import { query } from '@anthropic-ai/claude-agent-sdk';
+
 import {
   CREDENTIAL_PROXY_PORT,
   OLLAMA_HOST,
@@ -19,6 +21,7 @@ import {
   WEBHOOK_LLM_PROVIDER,
 } from './config.js';
 import { PROXY_BIND_HOST } from './container-runtime.js';
+import { detectAuthMode } from './credential-proxy.js';
 import { logger } from './logger.js';
 
 export type LlmProvider = 'claude' | 'ollama';
@@ -97,53 +100,90 @@ function postJson(
 }
 
 // ---------------------------------------------------------------------------
-// Claude (via credential proxy on localhost)
+// Claude (via Agent SDK through credential proxy — supports OAuth)
 // ---------------------------------------------------------------------------
 
 async function callClaude(req: LlmRequest): Promise<LlmResponse> {
-  const model = req.model || 'claude-3-5-haiku-latest';
-  const maxTokens = req.maxTokens ?? 1024;
+  const model = req.model || 'claude-haiku-4-5';
 
-  // Filter out system messages from the messages array for Anthropic API
-  const userMessages = req.messages.filter((m) => m.role !== 'system');
-
-  const body: Record<string, unknown> = {
-    model,
-    max_tokens: maxTokens,
-    messages: userMessages,
-  };
-
+  // Build the prompt: system + user messages combined
+  const parts: string[] = [];
   if (req.system) {
-    body['system'] = req.system;
+    parts.push(req.system);
   }
+  for (const msg of req.messages) {
+    if (msg.role !== 'system') {
+      parts.push(msg.content);
+    }
+  }
+  const prompt = parts.join('\n\n');
 
+  // Route through the credential proxy (handles OAuth token injection)
   const proxyHost = PROXY_BIND_HOST || 'localhost';
-  const proxyUrl = `http://${proxyHost}:${CREDENTIAL_PROXY_PORT}/v1/messages`;
+  const proxyUrl = `http://${proxyHost}:${CREDENTIAL_PROXY_PORT}`;
 
-  logger.debug({ model, proxyUrl }, 'Calling Claude via credential proxy');
-
-  const raw = await postJson(proxyUrl, body, {
-    'anthropic-version': '2023-06-01',
-    // x-api-key is injected by the credential proxy
-    'x-api-key': 'placeholder',
-  });
-
-  const parsed = JSON.parse(raw) as {
-    content?: Array<{ type: string; text: string }>;
-    error?: { message: string };
+  // Set env vars for the SDK to use the proxy
+  const authMode = detectAuthMode();
+  const envOverrides: Record<string, string> = {
+    ANTHROPIC_BASE_URL: proxyUrl,
   };
-
-  if (parsed.error) {
-    throw new Error(`Claude error: ${parsed.error.message}`);
+  if (authMode === 'api-key') {
+    envOverrides.ANTHROPIC_API_KEY = 'placeholder';
+  } else {
+    envOverrides.CLAUDE_CODE_OAUTH_TOKEN = 'placeholder';
   }
 
-  const text =
-    parsed.content
-      ?.filter((b) => b.type === 'text')
-      .map((b) => b.text)
-      .join('') ?? '';
+  // Temporarily set env vars for the SDK
+  const savedEnv: Record<string, string | undefined> = {};
+  for (const [key, val] of Object.entries(envOverrides)) {
+    savedEnv[key] = process.env[key];
+    process.env[key] = val;
+  }
 
-  return { text, provider: 'claude', model };
+  logger.debug({ model, proxyUrl, authMode }, 'Calling Claude via Agent SDK');
+
+  try {
+    let resultText = '';
+
+    // Use the Agent SDK's query function — it handles OAuth internally
+    const messages = query({
+      prompt,
+      options: {
+        maxTurns: 1,
+        model,
+        systemPrompt: req.system || '',
+        allowedTools: [],
+      },
+    });
+
+    for await (const message of messages) {
+      if (message.type === 'assistant' && 'message' in message) {
+        const content = (message as { message: { content: Array<{ type: string; text?: string }> } }).message.content;
+        for (const block of content) {
+          if (block.type === 'text' && block.text) {
+            resultText += block.text;
+          }
+        }
+      }
+      if (message.type === 'result') {
+        const text = (message as { result?: string }).result;
+        if (text) {
+          resultText = text;
+        }
+      }
+    }
+
+    return { text: resultText, provider: 'claude', model };
+  } finally {
+    // Restore env vars
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = val;
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
