@@ -34,15 +34,88 @@
  */
 
 import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
+import fs from 'fs';
+import path from 'path';
 
 import { WEBHOOK_SECRET } from './config.js';
+import {
+  getAllTasks,
+  getTaskById,
+  updateTask,
+  deleteTask,
+} from './db.js';
 import { callLlm, LlmProvider } from './llm-provider.js';
 import { logger } from './logger.js';
 import {
   handlePaperlessWebhook,
   isPaperlessLexofficeEnabled,
 } from './paperless-lexoffice.js';
-import { NewMessage, RegisteredGroup } from './types.js';
+import { NewMessage, RegisteredGroup, ScheduledTask } from './types.js';
+
+// Skills directory (relative to project root)
+const SKILLS_DIR = path.join(import.meta.dirname, '..', 'container', 'skills');
+
+interface SkillInfo {
+  name: string;
+  description: string;
+  allowedTools?: string;
+  path: string;
+}
+
+function parseSkillMd(content: string): { name?: string; description?: string; allowedTools?: string } {
+  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!frontmatterMatch) return {};
+
+  const frontmatter = frontmatterMatch[1];
+  const result: { name?: string; description?: string; allowedTools?: string } = {};
+
+  const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
+  if (nameMatch) result.name = nameMatch[1].trim();
+
+  const descMatch = frontmatter.match(/^description:\s*(.+)$/m);
+  if (descMatch) result.description = descMatch[1].trim();
+
+  const toolsMatch = frontmatter.match(/^allowed-tools:\s*(.+)$/m);
+  if (toolsMatch) result.allowedTools = toolsMatch[1].trim();
+
+  return result;
+}
+
+function getInstalledSkills(): SkillInfo[] {
+  const skills: SkillInfo[] = [];
+
+  if (!fs.existsSync(SKILLS_DIR)) {
+    return skills;
+  }
+
+  const dirs = fs.readdirSync(SKILLS_DIR, { withFileTypes: true })
+    .filter(d => d.isDirectory())
+    .map(d => d.name);
+
+  for (const dir of dirs) {
+    const skillPath = path.join(SKILLS_DIR, dir, 'SKILL.md');
+    if (fs.existsSync(skillPath)) {
+      try {
+        const content = fs.readFileSync(skillPath, 'utf-8');
+        const parsed = parseSkillMd(content);
+        skills.push({
+          name: parsed.name || dir,
+          description: parsed.description || 'No description',
+          allowedTools: parsed.allowedTools,
+          path: dir,
+        });
+      } catch {
+        skills.push({
+          name: dir,
+          description: 'Failed to parse SKILL.md',
+          path: dir,
+        });
+      }
+    }
+  }
+
+  return skills;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -412,7 +485,111 @@ export function startWebhookServer(
           return;
         }
 
-        // Only POST is supported for data endpoints
+        // GET /api/status — system status for Command Center dashboard
+        if (req.method === 'GET' && req.url === '/api/status') {
+          const groups = deps.registeredGroups();
+          const groupList = Object.entries(groups).map(([jid, g]) => ({
+            jid,
+            name: g.name,
+            folder: g.folder,
+          }));
+          sendJson(res, 200, {
+            ok: true,
+            version: '1.7.1',
+            groups: groupList,
+            groupCount: groupList.length,
+            uptime: process.uptime(),
+          });
+          return;
+        }
+
+        // GET /api/groups — registered groups list
+        if (req.method === 'GET' && req.url === '/api/groups') {
+          const groups = deps.registeredGroups();
+          const groupList = Object.entries(groups).map(([jid, g]) => ({
+            jid,
+            name: g.name,
+            folder: g.folder,
+          }));
+          sendJson(res, 200, { ok: true, groups: groupList });
+          return;
+        }
+
+        // GET /api/skills — installed skills
+        if (req.method === 'GET' && req.url === '/api/skills') {
+          const skills = getInstalledSkills();
+          sendJson(res, 200, { ok: true, skills });
+          return;
+        }
+
+        // GET /api/tasks — all scheduled tasks
+        if (req.method === 'GET' && req.url === '/api/tasks') {
+          const tasks = getAllTasks();
+          sendJson(res, 200, { ok: true, tasks });
+          return;
+        }
+
+        // GET /api/tasks/:id — single task
+        const taskMatch = req.url?.match(/^\/api\/tasks\/([^/]+)\/?$/);
+        if (req.method === 'GET' && taskMatch) {
+          const task = getTaskById(taskMatch[1]);
+          if (!task) {
+            sendJson(res, 404, { ok: false, error: 'Task not found' });
+            return;
+          }
+          sendJson(res, 200, { ok: true, task });
+          return;
+        }
+
+        // PATCH /api/tasks/:id — update task (pause/resume/edit)
+        if (req.method === 'PATCH' && taskMatch) {
+          const task = getTaskById(taskMatch[1]);
+          if (!task) {
+            sendJson(res, 404, { ok: false, error: 'Task not found' });
+            return;
+          }
+          let body: Record<string, unknown> = {};
+          try {
+            const raw = await readBody(req);
+            if (raw.length > 0) {
+              body = JSON.parse(raw.toString('utf-8')) as Record<string, unknown>;
+            }
+          } catch {
+            sendJson(res, 400, { ok: false, error: 'Invalid JSON body' });
+            return;
+          }
+          const updates: Partial<Pick<ScheduledTask, 'status' | 'prompt' | 'schedule_type' | 'schedule_value'>> = {};
+          if (body.status === 'active' || body.status === 'paused') {
+            updates.status = body.status;
+          }
+          if (typeof body.prompt === 'string') {
+            updates.prompt = body.prompt;
+          }
+          if (body.schedule_type === 'cron' || body.schedule_type === 'interval' || body.schedule_type === 'once') {
+            updates.schedule_type = body.schedule_type;
+          }
+          if (typeof body.schedule_value === 'string') {
+            updates.schedule_value = body.schedule_value;
+          }
+          updateTask(taskMatch[1], updates);
+          const updated = getTaskById(taskMatch[1]);
+          sendJson(res, 200, { ok: true, task: updated });
+          return;
+        }
+
+        // DELETE /api/tasks/:id — delete task
+        if (req.method === 'DELETE' && taskMatch) {
+          const task = getTaskById(taskMatch[1]);
+          if (!task) {
+            sendJson(res, 404, { ok: false, error: 'Task not found' });
+            return;
+          }
+          deleteTask(taskMatch[1]);
+          sendJson(res, 200, { ok: true, deleted: taskMatch[1] });
+          return;
+        }
+
+        // Only POST is supported for webhook endpoints
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: 'Method not allowed' });
           return;

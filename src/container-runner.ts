@@ -285,9 +285,12 @@ function buildContainerArgs(
   }
 
   // Pass Peppermint Verwaltung token if configured
-  const verwaltungSecrets = readEnvFile(["VERWALTUNG_API_TOKEN"]);
+  const verwaltungSecrets = readEnvFile(['VERWALTUNG_API_TOKEN']);
   if (verwaltungSecrets.VERWALTUNG_API_TOKEN) {
-    args.push("-e", `VERWALTUNG_API_TOKEN=${verwaltungSecrets.VERWALTUNG_API_TOKEN}`);
+    args.push(
+      '-e',
+      `VERWALTUNG_API_TOKEN=${verwaltungSecrets.VERWALTUNG_API_TOKEN}`,
+    );
   }
 
   // Pass Paperless-ngx credentials if configured
