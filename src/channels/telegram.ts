@@ -334,8 +334,10 @@ function setupBotHandlers(bot: Bot, opts: TelegramChannelOpts): void {
     let replyContext = '';
     if (ctx.message.reply_to_message) {
       const replied = ctx.message.reply_to_message;
-      const repliedText = (replied as any).text || (replied as any).caption || '[media]';
-      const repliedSender = replied.from?.first_name || replied.from?.username || 'Unknown';
+      const repliedText =
+        (replied as any).text || (replied as any).caption || '[media]';
+      const repliedSender =
+        replied.from?.first_name || replied.from?.username || 'Unknown';
       replyContext = `[Replying to ${repliedSender}: "${repliedText.slice(0, 200)}${repliedText.length > 200 ? '...' : ''}"]\n\n`;
     }
 

@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Grok Imagine Video**: `--video grok` option in generate_short.py — xAI video generation as alternative to Runway (up to 15s, 720p)
 - **Telegram Reply Context**: When users reply to a message, the agent now sees the quoted message context in format `[Replying to Name: "quoted text"]`
 - Pool bot audio/voice sending support (sendPoolAudio, sendPoolVoice)
 

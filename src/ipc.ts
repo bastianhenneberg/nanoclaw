@@ -219,15 +219,26 @@ async function dispatchIpcMessage(
     data.chatJid.startsWith('tg:')
   ) {
     // Auto-detect audio files sent as documents
-    let effectiveType = data.type as 'photo' | 'video' | 'document' | 'audio' | 'voice';
+    let effectiveType = data.type as
+      | 'photo'
+      | 'video'
+      | 'document'
+      | 'audio'
+      | 'voice';
     if (data.type === 'document' && data.filePath) {
       const ext = path.extname(data.filePath).toLowerCase();
       if (['.mp3', '.wav', '.m4a', '.aac', '.flac'].includes(ext)) {
         effectiveType = 'audio';
-        logger.info({ filePath: data.filePath, ext }, 'Auto-detected audio file');
+        logger.info(
+          { filePath: data.filePath, ext },
+          'Auto-detected audio file',
+        );
       } else if (['.ogg', '.oga', '.opus'].includes(ext)) {
         effectiveType = 'voice';
-        logger.info({ filePath: data.filePath, ext }, 'Auto-detected voice file');
+        logger.info(
+          { filePath: data.filePath, ext },
+          'Auto-detected voice file',
+        );
       }
     }
     await sendMediaFile(
