@@ -9,6 +9,8 @@ import {
   sendPoolPhoto,
   sendPoolVideo,
   sendPoolDocument,
+  sendPoolAudio,
+  sendPoolVoice,
 } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
@@ -26,6 +28,8 @@ export interface IpcDeps {
     filePath: string,
     caption?: string,
   ) => Promise<void>;
+  sendAudio: (jid: string, filePath: string, caption?: string) => Promise<void>;
+  sendVoice: (jid: string, filePath: string, caption?: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -104,7 +108,7 @@ function resolveHostPath(
  * Resolves container path → host path, checks existence, routes to pool or deps sender.
  */
 async function sendMediaFile(
-  type: 'photo' | 'video' | 'document',
+  type: 'photo' | 'video' | 'document' | 'audio' | 'voice',
   data: {
     chatJid: string;
     filePath: string;
@@ -141,6 +145,8 @@ async function sendMediaFile(
     photo: sendPoolPhoto,
     video: sendPoolVideo,
     document: sendPoolDocument,
+    audio: sendPoolAudio,
+    voice: sendPoolVoice,
   };
   const depsSenders: Record<
     string,
@@ -149,6 +155,8 @@ async function sendMediaFile(
     photo: deps.sendPhoto,
     video: deps.sendVideo,
     document: deps.sendDocument,
+    audio: deps.sendAudio,
+    voice: deps.sendVoice,
   };
 
   if (data.sender) {
@@ -204,12 +212,26 @@ async function dispatchIpcMessage(
   } else if (
     (data.type === 'photo' ||
       data.type === 'video' ||
-      data.type === 'document') &&
+      data.type === 'document' ||
+      data.type === 'audio' ||
+      data.type === 'voice') &&
     data.filePath &&
     data.chatJid.startsWith('tg:')
   ) {
+    // Auto-detect audio files sent as documents
+    let effectiveType = data.type as 'photo' | 'video' | 'document' | 'audio' | 'voice';
+    if (data.type === 'document' && data.filePath) {
+      const ext = path.extname(data.filePath).toLowerCase();
+      if (['.mp3', '.wav', '.m4a', '.aac', '.flac'].includes(ext)) {
+        effectiveType = 'audio';
+        logger.info({ filePath: data.filePath, ext }, 'Auto-detected audio file');
+      } else if (['.ogg', '.oga', '.opus'].includes(ext)) {
+        effectiveType = 'voice';
+        logger.info({ filePath: data.filePath, ext }, 'Auto-detected voice file');
+      }
+    }
     await sendMediaFile(
-      data.type,
+      effectiveType,
       data as {
         chatJid: string;
         filePath: string;

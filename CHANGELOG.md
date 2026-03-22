@@ -1,4 +1,11 @@
 # Changelog
+
+## [Unreleased]
+
+### Added
+- **Telegram Reply Context**: When users reply to a message, the agent now sees the quoted message context in format `[Replying to Name: "quoted text"]`
+- Pool bot audio/voice sending support (sendPoolAudio, sendPoolVoice)
+
 ## v1.3.1 (2026-03-20)
 
 ### Command Center Integration
@@ -70,5 +77,3 @@ All notable changes to NanoClaw will be documented in this file.
 
 ## [1.2.0](https://github.com/qwibitai/nanoclaw/compare/v1.1.6...v1.2.0)
 
-[BREAKING] WhatsApp removed from core, now a skill. Run `/add-whatsapp` to re-add (existing auth/groups preserved).
-- **fix:** Prevent scheduled tasks from executing twice when container runtime exceeds poll interval (#138, #669)

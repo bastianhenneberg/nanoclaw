@@ -209,6 +209,62 @@ export async function sendPoolDocument(
   }
 }
 
+export async function sendPoolAudio(
+  chatId: string,
+  filePath: string,
+  caption: string | undefined,
+  sender: string,
+  groupFolder: string,
+): Promise<void> {
+  const api = await getPoolApi(sender, groupFolder);
+  if (!api) return;
+
+  try {
+    const numericId = chatId.replace(/^tg:/, '');
+    await api.sendAudio(
+      numericId,
+      new InputFile(fs.createReadStream(filePath)),
+      {
+        caption: caption || undefined,
+      },
+    );
+    logger.info({ chatId, sender, filePath }, 'Pool audio sent');
+  } catch (err) {
+    logger.error(
+      { chatId, sender, filePath, err },
+      'Failed to send pool audio',
+    );
+  }
+}
+
+export async function sendPoolVoice(
+  chatId: string,
+  filePath: string,
+  caption: string | undefined,
+  sender: string,
+  groupFolder: string,
+): Promise<void> {
+  const api = await getPoolApi(sender, groupFolder);
+  if (!api) return;
+
+  try {
+    const numericId = chatId.replace(/^tg:/, '');
+    await api.sendVoice(
+      numericId,
+      new InputFile(fs.createReadStream(filePath)),
+      {
+        caption: caption || undefined,
+      },
+    );
+    logger.info({ chatId, sender, filePath }, 'Pool voice sent');
+  } catch (err) {
+    logger.error(
+      { chatId, sender, filePath, err },
+      'Failed to send pool voice',
+    );
+  }
+}
+
 // Store main bot reference for sendPhoto access
 let mainBotApi: Api | null = null;
 
@@ -274,6 +330,15 @@ function setupBotHandlers(bot: Bot, opts: TelegramChannelOpts): void {
     const sender = ctx.from?.id.toString() || '';
     const msgId = ctx.message.message_id.toString();
 
+    // Handle reply context - include quoted message
+    let replyContext = '';
+    if (ctx.message.reply_to_message) {
+      const replied = ctx.message.reply_to_message;
+      const repliedText = (replied as any).text || (replied as any).caption || '[media]';
+      const repliedSender = replied.from?.first_name || replied.from?.username || 'Unknown';
+      replyContext = `[Replying to ${repliedSender}: "${repliedText.slice(0, 200)}${repliedText.length > 200 ? '...' : ''}"]\n\n`;
+    }
+
     const chatName =
       ctx.chat.type === 'private'
         ? senderName
@@ -317,7 +382,7 @@ function setupBotHandlers(bot: Bot, opts: TelegramChannelOpts): void {
       chat_jid: chatJid,
       sender,
       sender_name: senderName,
-      content,
+      content: replyContext + content,
       timestamp,
       is_from_me: false,
     });
@@ -725,6 +790,58 @@ export class TelegramChannel implements Channel {
       logger.info({ jid, filePath }, 'Telegram document sent');
     } catch (err) {
       logger.error({ jid, filePath, err }, 'Failed to send Telegram document');
+    }
+  }
+
+  async sendAudio(
+    jid: string,
+    filePath: string,
+    caption?: string,
+  ): Promise<void> {
+    const api = this.getApiForJid(jid);
+    if (!api) {
+      logger.warn('No Telegram bot available');
+      return;
+    }
+
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      await api.sendAudio(
+        numericId,
+        new InputFile(fs.createReadStream(filePath)),
+        {
+          caption: caption || undefined,
+        },
+      );
+      logger.info({ jid, filePath }, 'Telegram audio sent');
+    } catch (err) {
+      logger.error({ jid, filePath, err }, 'Failed to send Telegram audio');
+    }
+  }
+
+  async sendVoice(
+    jid: string,
+    filePath: string,
+    caption?: string,
+  ): Promise<void> {
+    const api = this.getApiForJid(jid);
+    if (!api) {
+      logger.warn('No Telegram bot available');
+      return;
+    }
+
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      await api.sendVoice(
+        numericId,
+        new InputFile(fs.createReadStream(filePath)),
+        {
+          caption: caption || undefined,
+        },
+      );
+      logger.info({ jid, filePath }, 'Telegram voice sent');
+    } catch (err) {
+      logger.error({ jid, filePath, err }, 'Failed to send Telegram voice');
     }
   }
 

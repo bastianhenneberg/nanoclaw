@@ -749,6 +749,10 @@ async function main(): Promise<void> {
       requireChannelMethod(jid, 'sendVideo')(jid, fp, cap),
     sendDocument: (jid, fp, cap) =>
       requireChannelMethod(jid, 'sendDocument')(jid, fp, cap),
+    sendAudio: (jid, fp, cap) =>
+      requireChannelMethod(jid, 'sendAudio')(jid, fp, cap),
+    sendVoice: (jid, fp, cap) =>
+      requireChannelMethod(jid, 'sendVoice')(jid, fp, cap),
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {
