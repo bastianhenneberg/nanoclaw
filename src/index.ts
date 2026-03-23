@@ -380,20 +380,21 @@ async function runAgent(
       healthMonitor.unregisterContainer(currentContainerName);
     }
 
+    // After a session, distill memorable facts into memory storage.
+    // Runs fire-and-forget so it never blocks the response.
+    // Do this even for errors if we have streamed results — ensures memory
+    // is flushed even when containers are killed by health monitor.
+    const agentResult = output.result || streamedResults.join('\n\n');
+    if (agentResult) {
+      scheduleMemoryFlush(group.folder, prompt, agentResult);
+    }
+
     if (output.status === 'error') {
       logger.error(
         { group: group.name, error: output.error },
         'Container agent error',
       );
       return 'error';
-    }
-
-    // After a successful session, distill memorable facts into memory storage.
-    // Runs fire-and-forget so it never blocks the response.
-    // In streaming mode output.result is null — use collected streamed results instead.
-    const agentResult = output.result || streamedResults.join('\n\n');
-    if (agentResult) {
-      scheduleMemoryFlush(group.folder, prompt, agentResult);
     }
 
     return 'success';
