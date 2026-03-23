@@ -362,4 +362,65 @@ export class GroupQueue {
       'GroupQueue shutting down (containers detached, not killed)',
     );
   }
+
+  /**
+   * Reset a group's state after self-healing (container killed externally).
+   * This allows pending messages to be processed by a fresh container.
+   */
+  resetGroup(groupJid: string): void {
+    const state = this.groups.get(groupJid);
+    if (!state) return;
+
+    const wasActive = state.active;
+
+    // Reset state
+    state.active = false;
+    state.idleWaiting = false;
+    state.isTaskContainer = false;
+    state.runningTaskId = null;
+    state.process = null;
+    state.containerName = null;
+    state.groupFolder = null;
+    // Don't reset retryCount — keep backoff if things keep failing
+
+    if (wasActive) {
+      this.activeCount = Math.max(0, this.activeCount - 1);
+    }
+
+    logger.info({ groupJid, wasActive }, 'Group state reset by health monitor');
+
+    // Re-trigger message processing if there are pending messages
+    if (state.pendingMessages || state.pendingTasks.length > 0) {
+      // Small delay to avoid immediate re-spawn of a problematic container
+      setTimeout(() => {
+        if (!this.shuttingDown) {
+          this.drainGroup(groupJid);
+        }
+      }, 5000);
+    }
+  }
+
+  /**
+   * Get current state for health monitoring
+   */
+  getGroupState(groupJid: string): GroupState | undefined {
+    return this.groups.get(groupJid);
+  }
+
+  /**
+   * Get all active container names for health monitoring
+   */
+  getActiveContainers(): Array<{ jid: string; containerName: string; groupFolder: string }> {
+    const result: Array<{ jid: string; containerName: string; groupFolder: string }> = [];
+    for (const [jid, state] of this.groups) {
+      if (state.active && state.containerName && state.groupFolder) {
+        result.push({
+          jid,
+          containerName: state.containerName,
+          groupFolder: state.groupFolder,
+        });
+      }
+    }
+    return result;
+  }
 }

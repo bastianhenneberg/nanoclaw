@@ -48,6 +48,7 @@ import {
   storeMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
+import { healthMonitor } from './health-monitor.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { initBotPool } from './channels/telegram.js';
 import { startIpcWatcher } from './ipc.js';
@@ -349,8 +350,10 @@ async function runAgent(
         assistantName: ASSISTANT_NAME,
         ...(imageAttachments.length > 0 && { imageAttachments }),
       },
-      (proc, containerName) =>
-        queue.registerProcess(chatJid, proc, containerName, group.folder),
+      (proc, containerName) => {
+        queue.registerProcess(chatJid, proc, containerName, group.folder);
+        healthMonitor.registerContainer(containerName, chatJid, group.folder, false);
+      },
       wrappedOnOutput,
     );
 
@@ -727,8 +730,10 @@ async function main(): Promise<void> {
     registeredGroups: () => registeredGroups,
     getSessions: () => sessions,
     queue,
-    onProcess: (groupJid, proc, containerName, groupFolder) =>
-      queue.registerProcess(groupJid, proc, containerName, groupFolder),
+    onProcess: (groupJid, proc, containerName, groupFolder) => {
+      queue.registerProcess(groupJid, proc, containerName, groupFolder);
+      healthMonitor.registerContainer(containerName, groupJid, groupFolder, true);
+    },
     sendMessage: async (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) {
@@ -781,6 +786,33 @@ async function main(): Promise<void> {
     },
   });
   queue.setProcessMessagesFn(processGroupMessages);
+
+  // Start health monitoring for self-healing
+  healthMonitor.setHealCallback((groupJid) => {
+    queue.resetGroup(groupJid);
+  });
+  healthMonitor.setAlertCallback((message, level) => {
+    // Find main group and send alert there
+    const mainEntry = Object.entries(registeredGroups).find(([, g]) => g.isMain);
+    if (mainEntry) {
+      const [mainJid] = mainEntry;
+      const channel = findChannel(channels, mainJid);
+      if (channel) {
+        const prefix = level === 'error' ? '🚨' : '⚠️';
+        channel.sendMessage(mainJid, `${prefix} ${message}`).catch((err) => {
+          logger.error({ err }, 'Failed to send health alert');
+        });
+      }
+    }
+    if (level === 'error') {
+      logger.error(message);
+    } else {
+      logger.warn(message);
+    }
+  });
+  healthMonitor.start();
+  logger.info('Health monitor started');
+
   recoverPendingMessages();
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
