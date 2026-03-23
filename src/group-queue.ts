@@ -410,8 +410,16 @@ export class GroupQueue {
   /**
    * Get all active container names for health monitoring
    */
-  getActiveContainers(): Array<{ jid: string; containerName: string; groupFolder: string }> {
-    const result: Array<{ jid: string; containerName: string; groupFolder: string }> = [];
+  getActiveContainers(): Array<{
+    jid: string;
+    containerName: string;
+    groupFolder: string;
+  }> {
+    const result: Array<{
+      jid: string;
+      containerName: string;
+      groupFolder: string;
+    }> = [];
     for (const [jid, state] of this.groups) {
       if (state.active && state.containerName && state.groupFolder) {
         result.push({

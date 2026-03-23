@@ -321,9 +321,16 @@ async function runAgent(
   // Collect streamed results for memory flush (streaming mode returns result: null)
   const streamedResults: string[] = [];
 
+  // Track container name for health monitor updates
+  let currentContainerName: string | null = null;
+
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
+        // Update health monitor on activity
+        if (currentContainerName) {
+          healthMonitor.updateActivity(currentContainerName);
+        }
         if (output.newSessionId) {
           sessions[group.folder] = output.newSessionId;
           setSession(group.folder, output.newSessionId);
@@ -351,8 +358,14 @@ async function runAgent(
         ...(imageAttachments.length > 0 && { imageAttachments }),
       },
       (proc, containerName) => {
+        currentContainerName = containerName;
         queue.registerProcess(chatJid, proc, containerName, group.folder);
-        healthMonitor.registerContainer(containerName, chatJid, group.folder, false);
+        healthMonitor.registerContainer(
+          containerName,
+          chatJid,
+          group.folder,
+          false,
+        );
       },
       wrappedOnOutput,
     );
@@ -360,6 +373,11 @@ async function runAgent(
     if (output.newSessionId) {
       sessions[group.folder] = output.newSessionId;
       setSession(group.folder, output.newSessionId);
+    }
+
+    // Unregister container from health monitor
+    if (currentContainerName) {
+      healthMonitor.unregisterContainer(currentContainerName);
     }
 
     if (output.status === 'error') {
@@ -732,7 +750,12 @@ async function main(): Promise<void> {
     queue,
     onProcess: (groupJid, proc, containerName, groupFolder) => {
       queue.registerProcess(groupJid, proc, containerName, groupFolder);
-      healthMonitor.registerContainer(containerName, groupJid, groupFolder, true);
+      healthMonitor.registerContainer(
+        containerName,
+        groupJid,
+        groupFolder,
+        true,
+      );
     },
     sendMessage: async (jid, rawText) => {
       const channel = findChannel(channels, jid);
@@ -793,7 +816,9 @@ async function main(): Promise<void> {
   });
   healthMonitor.setAlertCallback((message, level) => {
     // Find main group and send alert there
-    const mainEntry = Object.entries(registeredGroups).find(([, g]) => g.isMain);
+    const mainEntry = Object.entries(registeredGroups).find(
+      ([, g]) => g.isMain,
+    );
     if (mainEntry) {
       const [mainJid] = mainEntry;
       const channel = findChannel(channels, mainJid);

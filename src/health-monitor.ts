@@ -99,7 +99,10 @@ export class HealthMonitor {
       lastActivity: now,
       isTaskContainer,
     });
-    logger.debug({ containerName, groupJid }, 'Container registered for health monitoring');
+    logger.debug(
+      { containerName, groupJid },
+      'Container registered for health monitoring',
+    );
   }
 
   /**
@@ -117,7 +120,10 @@ export class HealthMonitor {
    */
   unregisterContainer(containerName: string): void {
     this.containers.delete(containerName);
-    logger.debug({ containerName }, 'Container unregistered from health monitoring');
+    logger.debug(
+      { containerName },
+      'Container unregistered from health monitoring',
+    );
   }
 
   /**
@@ -194,7 +200,10 @@ export class HealthMonitor {
         const containerAge = await this.getContainerAge(dockerContainer);
         if (containerAge > STUCK_THRESHOLD) {
           const msg = `Orphan container ${dockerContainer} detected (running ${Math.round(containerAge / 60000)}min, not tracked)`;
-          logger.warn({ containerName: dockerContainer, age: containerAge }, msg);
+          logger.warn(
+            { containerName: dockerContainer, age: containerAge },
+            msg,
+          );
           issues.push(msg);
           await this.killOrphanContainer(dockerContainer);
         }
@@ -263,14 +272,18 @@ export class HealthMonitor {
 
     try {
       // Stop the container gracefully, then force kill if needed
-      await execAsync(stopContainer(container.containerName), { timeout: 15000 });
+      await execAsync(stopContainer(container.containerName), {
+        timeout: 15000,
+      });
     } catch (err) {
       logger.warn(
         { containerName: container.containerName, err },
         'Graceful stop failed, force killing',
       );
       try {
-        await execAsync(`docker kill ${container.containerName}`, { timeout: 5000 });
+        await execAsync(`docker kill ${container.containerName}`, {
+          timeout: 5000,
+        });
       } catch {
         // Container might already be dead
       }
