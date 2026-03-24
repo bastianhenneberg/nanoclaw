@@ -928,6 +928,35 @@ export async function processTaskIpc(
       }
       break;
 
+    case 'list_ideas':
+      if (data.requestId) {
+        const responseDir = path.join(
+          DATA_DIR,
+          'ipc',
+          sourceGroup,
+          'responses',
+        );
+        fs.mkdirSync(responseDir, { recursive: true });
+        const responseFile = path.join(responseDir, `${data.requestId}.json`);
+
+        try {
+          const { readIdeas } = await import('./memory.js');
+          const result = await readIdeas(
+            sourceGroup,
+            (data.scope as 'group' | 'agent' | 'global' | 'all') || 'all',
+          );
+          fs.writeFileSync(responseFile, JSON.stringify({ result }));
+          logger.info({ sourceGroup }, 'Ideas listed via IPC');
+        } catch (err) {
+          fs.writeFileSync(
+            responseFile,
+            JSON.stringify({ error: String(err) }),
+          );
+          logger.error({ sourceGroup, err }, 'Error listing ideas via IPC');
+        }
+      }
+      break;
+
     case 'save_idea':
       if (data.content) {
         try {

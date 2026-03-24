@@ -789,6 +789,52 @@ IMPORTANT: Always confirm with the user before sending an email! Show them the r
 );
 
 server.tool(
+  'list_ideas',
+  `List saved ideas. Returns all ideas stored for this group/agent. Use this to recall previously saved ideas, check what ideas exist, or reference them in conversations.`,
+  {
+    scope: z.enum(['group', 'agent', 'global', 'all']).default('all').describe('Filter by scope: "group" = this group only, "agent" = all groups, "global" = all agents, "all" = everything visible'),
+  },
+  async (args) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const data = {
+      type: 'list_ideas',
+      scope: args.scope,
+      groupFolder,
+      requestId,
+      timestamp: new Date().toISOString(),
+    };
+
+    const requestFile = path.join(TASKS_DIR, `${requestId}.json`);
+    const responseFile = path.join(IPC_DIR, 'responses', `${requestId}.json`);
+
+    fs.mkdirSync(path.join(IPC_DIR, 'responses'), { recursive: true });
+    fs.writeFileSync(requestFile, JSON.stringify(data));
+
+    // Poll for response (max 10 seconds)
+    const maxWait = 10000;
+    const pollInterval = 200;
+    let waited = 0;
+
+    while (waited < maxWait) {
+      if (fs.existsSync(responseFile)) {
+        const response = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
+        fs.unlinkSync(responseFile);
+
+        if (response.error) {
+          return { content: [{ type: 'text' as const, text: `Error: ${response.error}` }], isError: true };
+        }
+
+        return { content: [{ type: 'text' as const, text: response.result }] };
+      }
+      await new Promise(r => setTimeout(r, pollInterval));
+      waited += pollInterval;
+    }
+
+    return { content: [{ type: 'text' as const, text: 'Timeout waiting for ideas list' }], isError: true };
+  },
+);
+
+server.tool(
   'save_idea',
   `Save an idea for the team or project. Ideas are stored permanently (never auto-cleaned) and can be shared across groups or agents via scope.
 Use this when you or the user have an interesting idea, feature request, improvement suggestion, or creative thought worth remembering.`,

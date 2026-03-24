@@ -363,6 +363,85 @@ async function flushSessionMemory(
 }
 
 /**
+ * Read ideas — tries AI Brain first, falls back to local files.
+ */
+export async function readIdeas(
+  groupFolder: string,
+  scope: 'group' | 'agent' | 'global' | 'all' = 'all',
+): Promise<string> {
+  if (!MEMORY_ENABLED) return 'Memory system is disabled.';
+
+  // Try AI Brain first
+  if (isAiBrainEnabled()) {
+    try {
+      const params = new URLSearchParams({
+        agent: AGENT_NAME,
+        category: 'idea',
+        limit: '50',
+      });
+
+      if (scope !== 'all') {
+        params.set('scope', scope);
+      }
+
+      if (scope === 'group' || scope === 'all') {
+        params.set('group', groupFolder);
+      }
+
+      const response = await fetch(
+        `${AI_BRAIN_API_URL}/api/v1/agent-memories?${params}`,
+        {
+          headers: { 'X-API-Key': AI_BRAIN_API_KEY },
+        },
+      );
+
+      if (response.ok) {
+        const data = (await response.json()) as {
+          data: Array<{
+            id: number;
+            content: string;
+            scope: string;
+            group: string;
+            created_at: string;
+          }>;
+        };
+
+        if (data.data && data.data.length > 0) {
+          const lines = data.data.map((idea) => {
+            const date = new Date(idea.created_at).toLocaleDateString('de-DE');
+            return `[${date}] (${idea.scope}/${idea.group}) ${idea.content}`;
+          });
+          return `## Ideas (${data.data.length})\n\n${lines.join('\n\n')}`;
+        }
+        return 'No ideas found.';
+      }
+    } catch (err) {
+      logger.warn({ groupFolder, err }, 'AI Brain API read ideas failed, using local');
+    }
+  }
+
+  // Fallback to local files
+  const ideasDir = path.join(GROUPS_DIR, groupFolder, 'ideas');
+  if (!fs.existsSync(ideasDir)) return 'No ideas found (local).';
+
+  const files = fs
+    .readdirSync(ideasDir)
+    .filter((f) => /^\d{4}-\d{2}-\d{2}.*\.md$/.test(f))
+    .sort()
+    .reverse();
+
+  if (files.length === 0) return 'No ideas found (local).';
+
+  const parts: string[] = [];
+  for (const file of files.slice(0, 30)) {
+    const content = fs.readFileSync(path.join(ideasDir, file), 'utf-8').trim();
+    if (content) parts.push(content);
+  }
+
+  return parts.length > 0 ? parts.join('\n\n') : 'No ideas found (local).';
+}
+
+/**
  * Save an idea both locally and to AI Brain.
  * Ideas are always long-term and never auto-cleaned.
  */
@@ -400,21 +479,24 @@ export async function saveIdea(
   // 2. Write to AI Brain (fire-and-forget)
   if (isAiBrainEnabled()) {
     try {
-      const response = await fetch(`${AI_BRAIN_API_URL}/api/v1/agent-memories`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': AI_BRAIN_API_KEY,
+      const response = await fetch(
+        `${AI_BRAIN_API_URL}/api/v1/agent-memories`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-Key': AI_BRAIN_API_KEY,
+          },
+          body: JSON.stringify({
+            agent: AGENT_NAME,
+            group: groupFolder,
+            scope,
+            type: 'long-term',
+            category: 'idea',
+            content: entry,
+          }),
         },
-        body: JSON.stringify({
-          agent: AGENT_NAME,
-          group: groupFolder,
-          scope,
-          type: 'long-term',
-          category: 'idea',
-          content: entry,
-        }),
-      });
+      );
 
       if (!response.ok) {
         logger.warn(
