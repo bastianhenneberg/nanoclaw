@@ -72,6 +72,7 @@ export interface SchedulerDependencies {
     containerName: string,
     groupFolder: string,
   ) => void;
+  onProcessComplete?: (containerName: string) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
 }
 
@@ -149,6 +150,9 @@ async function runTask(
   let result: string | null = null;
   let error: string | null = null;
 
+  // Track container name for cleanup
+  let currentContainerName: string | null = null;
+
   // For group context mode, use the group's current session
   const sessions = deps.getSessions();
   const sessionId =
@@ -180,8 +184,10 @@ async function runTask(
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
       },
-      (proc, containerName) =>
-        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
+      (proc, containerName) => {
+        currentContainerName = containerName;
+        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder);
+      },
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
@@ -201,6 +207,11 @@ async function runTask(
 
     if (closeTimer) clearTimeout(closeTimer);
 
+    // Unregister container from health monitor
+    if (currentContainerName && deps.onProcessComplete) {
+      deps.onProcessComplete(currentContainerName);
+    }
+
     if (output.status === 'error') {
       error = output.error || 'Unknown error';
     } else if (output.result) {
@@ -214,6 +225,10 @@ async function runTask(
     );
   } catch (err) {
     if (closeTimer) clearTimeout(closeTimer);
+    // Unregister container from health monitor even on error
+    if (currentContainerName && deps.onProcessComplete) {
+      deps.onProcessComplete(currentContainerName);
+    }
     error = err instanceof Error ? err.message : String(err);
     logger.error({ taskId: task.id, error }, 'Task failed');
   }

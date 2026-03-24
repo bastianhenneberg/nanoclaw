@@ -758,6 +758,9 @@ async function main(): Promise<void> {
         true,
       );
     },
+    onProcessComplete: (containerName) => {
+      healthMonitor.unregisterContainer(containerName);
+    },
     sendMessage: async (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) {
