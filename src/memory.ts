@@ -416,7 +416,10 @@ export async function readIdeas(
         return 'No ideas found.';
       }
     } catch (err) {
-      logger.warn({ groupFolder, err }, 'AI Brain API read ideas failed, using local');
+      logger.warn(
+        { groupFolder, err },
+        'AI Brain API read ideas failed, using local',
+      );
     }
   }
 
