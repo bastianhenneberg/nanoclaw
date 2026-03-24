@@ -136,6 +136,22 @@ Single Node.js process. Channels are added via skills and self-register at start
 
 For the full architecture details, see [docs/SPEC.md](docs/SPEC.md).
 
+## Health Monitor & Self-Healing
+
+NanoClaw includes an automatic health monitoring system that detects and recovers from stuck containers:
+
+<p align="center">
+  <img src="docs/health-monitor-flow.png" alt="Health Monitor Flow" width="700">
+</p>
+
+**How it works:**
+- Monitors all running containers every 30 seconds
+- Tracks container start time and last activity
+- Automatically kills containers that are idle >31min or running >2h
+- Resets the group queue for self-healing
+- Sends alerts to the main channel when issues are detected
+- Memory is always flushed to AI Brain before cleanup (even on error)
+
 Key files:
 - `src/index.ts` - Orchestrator: state, message loop, agent invocation
 - `src/channels/registry.ts` - Channel registry (self-registration at startup)
@@ -143,6 +159,7 @@ Key files:
 - `src/router.ts` - Message formatting and outbound routing
 - `src/group-queue.ts` - Per-group queue with global concurrency limit
 - `src/container-runner.ts` - Spawns streaming agent containers
+- `src/health-monitor.ts` - Container health monitoring and self-healing
 - `src/task-scheduler.ts` - Runs scheduled tasks
 - `src/db.ts` - SQLite operations (messages, groups, sessions, state)
 - `groups/*/CLAUDE.md` - Per-group memory
