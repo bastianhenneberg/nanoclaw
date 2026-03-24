@@ -76,8 +76,42 @@ check_ssh() {
     [ "$nginx" != "active" ] && add_alert "$name: nginx DOWN"
 }
 
+# === BACKUP CHECK (omarchy) ===
+check_backup() {
+    local host="omarchy"
+    local backup_env="/home/codingmachine/clawd/backup/backup.env"
+    local max_age_hours=48
+    
+    # Check if backup.env exists
+    if [ ! -f "$backup_env" ]; then
+        add_alert "$host: Backup not configured"
+        return
+    fi
+    
+    # Load restic env
+    source "$backup_env"
+    
+    # Get latest snapshot timestamp (with timeout)
+    latest=$(timeout 30 restic snapshots --json 2>/dev/null | jq -r '.[-1].time // empty' 2>/dev/null)
+    
+    if [ -z "$latest" ]; then
+        add_alert "$host: No backup snapshots found"
+        return
+    fi
+    
+    # Calculate age in hours
+    latest_epoch=$(date -d "$latest" +%s 2>/dev/null || echo 0)
+    now_epoch=$(date +%s)
+    age_hours=$(( (now_epoch - latest_epoch) / 3600 ))
+    
+    if [ "$age_hours" -gt "$max_age_hours" ]; then
+        add_alert "$host: Backup ${age_hours}h old (max ${max_age_hours}h)"
+    fi
+}
+
 # === RUN CHECKS ===
 check_local
+check_backup
 check_ssh "bold-tokyo" "178.104.23.247" "forge"
 check_ssh "coolify-instanz" "188.245.53.38" "root"
 check_ssh "kiserver" "192.168.1.147" "bastian"
