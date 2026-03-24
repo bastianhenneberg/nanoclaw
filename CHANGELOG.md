@@ -14,6 +14,10 @@
 ### Tests
 - Added 66 new tests for previously untested modules: health-monitor, memory, webhook-server, llm-provider, image, router (270 → 336 total)
 
+### Refactored
+- Removed dead code `storeMessageDirect` from db.ts (duplicate of `storeMessage`)
+- Extracted `writeIpcResponse` helper in ipc.ts, replacing 4 identical response-writing blocks
+
 ## v1.3.1 (2026-03-20)
 
 ### Command Center Integration

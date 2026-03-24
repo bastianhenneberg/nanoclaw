@@ -19,6 +19,22 @@ import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 import { sendEmail } from './email-sender.js';
 
+/**
+ * Write an IPC response file for request/response style IPC calls.
+ * Creates the responses directory if needed.
+ */
+function writeIpcResponse(
+  sourceGroup: string,
+  requestId: string,
+  data: { result?: unknown; error?: string },
+): string {
+  const responseDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'responses');
+  fs.mkdirSync(responseDir, { recursive: true });
+  const responseFile = path.join(responseDir, `${requestId}.json`);
+  fs.writeFileSync(responseFile, JSON.stringify(data));
+  return responseFile;
+}
+
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
   sendPhoto: (jid: string, filePath: string, caption?: string) => Promise<void>;
@@ -745,15 +761,6 @@ export async function processTaskIpc(
     case 'list_emails':
       // List emails from IMAP inbox
       if (data.account && data.requestId) {
-        const responseDir = path.join(
-          DATA_DIR,
-          'ipc',
-          sourceGroup,
-          'responses',
-        );
-        fs.mkdirSync(responseDir, { recursive: true });
-        const responseFile = path.join(responseDir, `${data.requestId}.json`);
-
         try {
           const { listEmails } = await import('./channels/email.js');
           const result = await listEmails({
@@ -762,7 +769,7 @@ export async function processTaskIpc(
             limit: (data.limit as number) || 10,
             unreadOnly: (data.unreadOnly as boolean) || false,
           });
-          fs.writeFileSync(responseFile, JSON.stringify({ result }));
+          writeIpcResponse(sourceGroup, data.requestId, { result });
           logger.info(
             {
               sourceGroup,
@@ -772,10 +779,9 @@ export async function processTaskIpc(
             'Email list fetched via IPC',
           );
         } catch (err) {
-          fs.writeFileSync(
-            responseFile,
-            JSON.stringify({ error: String(err) }),
-          );
+          writeIpcResponse(sourceGroup, data.requestId, {
+            error: String(err),
+          });
           logger.error(
             { sourceGroup, account: data.account, err },
             'Error listing emails',
@@ -787,15 +793,6 @@ export async function processTaskIpc(
     case 'read_email':
       // Read full email content by UID
       if (data.account && data.uid && data.requestId) {
-        const responseDir = path.join(
-          DATA_DIR,
-          'ipc',
-          sourceGroup,
-          'responses',
-        );
-        fs.mkdirSync(responseDir, { recursive: true });
-        const responseFile = path.join(responseDir, `${data.requestId}.json`);
-
         try {
           const { readEmail } = await import('./channels/email.js');
           const result = await readEmail({
@@ -803,16 +800,15 @@ export async function processTaskIpc(
             uid: data.uid as number,
             folder: (data.folder as string) || undefined,
           });
-          fs.writeFileSync(responseFile, JSON.stringify({ result }));
+          writeIpcResponse(sourceGroup, data.requestId, { result });
           logger.info(
             { sourceGroup, account: data.account, uid: data.uid },
             'Email read via IPC',
           );
         } catch (err) {
-          fs.writeFileSync(
-            responseFile,
-            JSON.stringify({ error: String(err) }),
-          );
+          writeIpcResponse(sourceGroup, data.requestId, {
+            error: String(err),
+          });
           logger.error(
             { sourceGroup, account: data.account, uid: data.uid, err },
             'Error reading email',
@@ -824,15 +820,6 @@ export async function processTaskIpc(
     case 'forward_email':
       // Forward an email by UID
       if (data.account && data.uid && data.to && data.requestId) {
-        const responseDir = path.join(
-          DATA_DIR,
-          'ipc',
-          sourceGroup,
-          'responses',
-        );
-        fs.mkdirSync(responseDir, { recursive: true });
-        const responseFile = path.join(responseDir, `${data.requestId}.json`);
-
         try {
           const { forwardEmail } = await import('./channels/email.js');
           const success = await forwardEmail({
@@ -842,14 +829,11 @@ export async function processTaskIpc(
             folder: (data.folder as string) || undefined,
             comment: (data.comment as string) || undefined,
           });
-          fs.writeFileSync(
-            responseFile,
-            JSON.stringify({
-              result: success
-                ? 'Email forwarded successfully'
-                : 'Forward failed',
-            }),
-          );
+          writeIpcResponse(sourceGroup, data.requestId, {
+            result: success
+              ? 'Email forwarded successfully'
+              : 'Forward failed',
+          });
           logger.info(
             {
               sourceGroup,
@@ -861,10 +845,9 @@ export async function processTaskIpc(
             'Email forward via IPC',
           );
         } catch (err) {
-          fs.writeFileSync(
-            responseFile,
-            JSON.stringify({ error: String(err) }),
-          );
+          writeIpcResponse(sourceGroup, data.requestId, {
+            error: String(err),
+          });
           logger.error(
             { sourceGroup, account: data.account, uid: data.uid, err },
             'Error forwarding email',
@@ -930,28 +913,18 @@ export async function processTaskIpc(
 
     case 'list_ideas':
       if (data.requestId) {
-        const responseDir = path.join(
-          DATA_DIR,
-          'ipc',
-          sourceGroup,
-          'responses',
-        );
-        fs.mkdirSync(responseDir, { recursive: true });
-        const responseFile = path.join(responseDir, `${data.requestId}.json`);
-
         try {
           const { readIdeas } = await import('./memory.js');
           const result = await readIdeas(
             sourceGroup,
             (data.scope as 'group' | 'agent' | 'global' | 'all') || 'all',
           );
-          fs.writeFileSync(responseFile, JSON.stringify({ result }));
+          writeIpcResponse(sourceGroup, data.requestId, { result });
           logger.info({ sourceGroup }, 'Ideas listed via IPC');
         } catch (err) {
-          fs.writeFileSync(
-            responseFile,
-            JSON.stringify({ error: String(err) }),
-          );
+          writeIpcResponse(sourceGroup, data.requestId, {
+            error: String(err),
+          });
           logger.error({ sourceGroup, err }, 'Error listing ideas via IPC');
         }
       }
