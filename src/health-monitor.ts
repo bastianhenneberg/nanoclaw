@@ -181,7 +181,9 @@ export class HealthMonitor {
       }
 
       // Check 3: Container is tracked but not running in Docker (zombie state)
-      if (!runningContainers.has(containerName)) {
+      // Grace period: only flag as zombie if tracked for >30s (avoids false positives during rapid cycling)
+      const trackedTime = now - container.startTime;
+      if (!runningContainers.has(containerName) && trackedTime > 30_000) {
         const msg = `Container ${containerName} (${container.groupFolder}) is zombie (tracked but not running)`;
         logger.warn({ containerName }, msg);
         issues.push(msg);
