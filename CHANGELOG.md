@@ -7,6 +7,13 @@
 - **Telegram Reply Context**: When users reply to a message, the agent now sees the quoted message context in format `[Replying to Name: "quoted text"]`
 - Pool bot audio/voice sending support (sendPoolAudio, sendPoolVoice)
 
+### Fixed
+- **Webhook version drift**: `/api/status` now reads version from package.json instead of hardcoded string
+- **Race condition in llm-provider**: `process.env` manipulation replaced with one-time init to prevent concurrent call conflicts
+
+### Tests
+- Added 66 new tests for previously untested modules: health-monitor, memory, webhook-server, llm-provider, image, router (270 → 336 total)
+
 ## v1.3.1 (2026-03-20)
 
 ### Command Center Integration

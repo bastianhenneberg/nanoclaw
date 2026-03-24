@@ -39,6 +39,10 @@ import path from 'path';
 
 import { WEBHOOK_SECRET } from './config.js';
 import { getAllTasks, getTaskById, updateTask, deleteTask } from './db.js';
+
+const PKG_VERSION = JSON.parse(
+  fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf-8'),
+).version as string;
 import { callLlm, LlmProvider } from './llm-provider.js';
 import { logger } from './logger.js';
 import {
@@ -496,7 +500,7 @@ export function startWebhookServer(
           }));
           sendJson(res, 200, {
             ok: true,
-            version: '1.7.1',
+            version: PKG_VERSION,
             groups: groupList,
             groupCount: groupList.length,
             uptime: process.uptime(),

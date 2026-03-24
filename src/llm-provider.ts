@@ -26,6 +26,24 @@ import { logger } from './logger.js';
 
 export type LlmProvider = 'claude' | 'ollama';
 
+// Set proxy env vars once at module load — avoids race conditions when
+// multiple callClaude() invocations run concurrently.
+let claudeEnvInitialized = false;
+function ensureClaudeEnv(): void {
+  if (claudeEnvInitialized) return;
+  const proxyHost = PROXY_BIND_HOST || 'localhost';
+  process.env.ANTHROPIC_BASE_URL = `http://${proxyHost}:${CREDENTIAL_PROXY_PORT}`;
+  const authMode = detectAuthMode();
+  if (authMode === 'api-key') {
+    process.env.ANTHROPIC_API_KEY =
+      process.env.ANTHROPIC_API_KEY || 'placeholder';
+  } else {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN =
+      process.env.CLAUDE_CODE_OAUTH_TOKEN || 'placeholder';
+  }
+  claudeEnvInitialized = true;
+}
+
 export interface LlmMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -118,76 +136,46 @@ async function callClaude(req: LlmRequest): Promise<LlmResponse> {
   }
   const prompt = parts.join('\n\n');
 
-  // Route through the credential proxy (handles OAuth token injection)
-  const proxyHost = PROXY_BIND_HOST || 'localhost';
-  const proxyUrl = `http://${proxyHost}:${CREDENTIAL_PROXY_PORT}`;
+  // Ensure proxy env vars are set (once, thread-safe)
+  ensureClaudeEnv();
 
-  // Set env vars for the SDK to use the proxy
-  const authMode = detectAuthMode();
-  const envOverrides: Record<string, string> = {
-    ANTHROPIC_BASE_URL: proxyUrl,
-  };
-  if (authMode === 'api-key') {
-    envOverrides.ANTHROPIC_API_KEY = 'placeholder';
-  } else {
-    envOverrides.CLAUDE_CODE_OAUTH_TOKEN = 'placeholder';
-  }
+  logger.debug({ model, authMode: detectAuthMode() }, 'Calling Claude via Agent SDK');
 
-  // Temporarily set env vars for the SDK
-  const savedEnv: Record<string, string | undefined> = {};
-  for (const [key, val] of Object.entries(envOverrides)) {
-    savedEnv[key] = process.env[key];
-    process.env[key] = val;
-  }
+  let resultText = '';
 
-  logger.debug({ model, proxyUrl, authMode }, 'Calling Claude via Agent SDK');
+  // Use the Agent SDK's query function — it handles OAuth internally
+  const messages = query({
+    prompt,
+    options: {
+      maxTurns: 1,
+      model,
+      systemPrompt: req.system || '',
+      allowedTools: [],
+    },
+  });
 
-  try {
-    let resultText = '';
-
-    // Use the Agent SDK's query function — it handles OAuth internally
-    const messages = query({
-      prompt,
-      options: {
-        maxTurns: 1,
-        model,
-        systemPrompt: req.system || '',
-        allowedTools: [],
-      },
-    });
-
-    for await (const message of messages) {
-      if (message.type === 'assistant' && 'message' in message) {
-        const content = (
-          message as {
-            message: { content: Array<{ type: string; text?: string }> };
-          }
-        ).message.content;
-        for (const block of content) {
-          if (block.type === 'text' && block.text) {
-            resultText += block.text;
-          }
+  for await (const message of messages) {
+    if (message.type === 'assistant' && 'message' in message) {
+      const content = (
+        message as {
+          message: { content: Array<{ type: string; text?: string }> };
         }
-      }
-      if (message.type === 'result') {
-        const text = (message as { result?: string }).result;
-        if (text) {
-          resultText = text;
+      ).message.content;
+      for (const block of content) {
+        if (block.type === 'text' && block.text) {
+          resultText += block.text;
         }
       }
     }
-
-    return { text: resultText, provider: 'claude', model };
-  } finally {
-    // Restore env vars
-    for (const [key, val] of Object.entries(savedEnv)) {
-      if (val === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = val;
+    if (message.type === 'result') {
+      const text = (message as { result?: string }).result;
+      if (text) {
+        resultText = text;
       }
     }
   }
+
+  return { text: resultText, provider: 'claude', model };
 }
 
 // ---------------------------------------------------------------------------
