@@ -429,6 +429,9 @@ export async function processTaskIpc(
     // For read_email / forward_email
     uid?: number;
     comment?: string;
+    // For save_idea
+    content?: string;
+    scope?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -922,6 +925,24 @@ export async function processTaskIpc(
           { data },
           'Invalid email_action request - missing action, messageId, or account',
         );
+      }
+      break;
+
+    case 'save_idea':
+      if (data.content) {
+        try {
+          const { saveIdea } = await import('./memory.js');
+          await saveIdea(
+            sourceGroup,
+            data.content as string,
+            (data.scope as 'group' | 'agent' | 'global') || 'group',
+          );
+          logger.info({ sourceGroup }, 'Idea saved via IPC');
+        } catch (err) {
+          logger.error({ sourceGroup, err }, 'Error saving idea via IPC');
+        }
+      } else {
+        logger.warn({ data }, 'Invalid save_idea request - missing content');
       }
       break;
 

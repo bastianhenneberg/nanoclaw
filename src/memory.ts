@@ -363,6 +363,74 @@ async function flushSessionMemory(
 }
 
 /**
+ * Save an idea both locally and to AI Brain.
+ * Ideas are always long-term and never auto-cleaned.
+ */
+export async function saveIdea(
+  groupFolder: string,
+  content: string,
+  scope: 'group' | 'agent' | 'global' = 'group',
+): Promise<void> {
+  if (!MEMORY_ENABLED) return;
+
+  const today = new Date().toLocaleDateString('en-CA', {
+    timeZone: TIMEZONE,
+  });
+  const timeStr = new Date().toLocaleTimeString('de-DE', {
+    timeZone: TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  const entry = `### ${timeStr}\n${content}`;
+
+  // 1. Write locally (always — primary storage)
+  const ideasDir = path.join(GROUPS_DIR, groupFolder, 'ideas');
+  fs.mkdirSync(ideasDir, { recursive: true });
+  const dailyFile = path.join(ideasDir, `${today}.md`);
+  const isNewFile = !fs.existsSync(dailyFile);
+  const header = isNewFile ? `# Ideas — ${today}\n` : '';
+  fs.appendFileSync(dailyFile, `${header}\n${entry}\n`, 'utf-8');
+
+  logger.info(
+    { groupFolder, file: `ideas/${today}.md`, chars: content.length },
+    'Idea saved (local)',
+  );
+
+  // 2. Write to AI Brain (fire-and-forget)
+  if (isAiBrainEnabled()) {
+    try {
+      const response = await fetch(`${AI_BRAIN_API_URL}/api/v1/agent-memories`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': AI_BRAIN_API_KEY,
+        },
+        body: JSON.stringify({
+          agent: AGENT_NAME,
+          group: groupFolder,
+          scope,
+          type: 'long-term',
+          category: 'idea',
+          content: entry,
+        }),
+      });
+
+      if (!response.ok) {
+        logger.warn(
+          { groupFolder, status: response.status },
+          'AI Brain API idea write failed',
+        );
+      } else {
+        logger.debug({ groupFolder }, 'Idea synced to AI Brain');
+      }
+    } catch (err) {
+      logger.warn({ groupFolder, err }, 'AI Brain API unreachable for idea');
+    }
+  }
+}
+
+/**
  * Return a status summary for a group's memory store.
  * Used for diagnostics and the /memory command.
  */

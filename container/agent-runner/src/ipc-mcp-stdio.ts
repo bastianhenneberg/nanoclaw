@@ -788,6 +788,29 @@ IMPORTANT: Always confirm with the user before sending an email! Show them the r
   },
 );
 
+server.tool(
+  'save_idea',
+  `Save an idea for the team or project. Ideas are stored permanently (never auto-cleaned) and can be shared across groups or agents via scope.
+Use this when you or the user have an interesting idea, feature request, improvement suggestion, or creative thought worth remembering.`,
+  {
+    content: z.string().describe('The idea description — be specific and include context'),
+    scope: z.enum(['group', 'agent', 'global']).default('group').describe('Visibility: "group" = this group only, "agent" = all groups of this agent, "global" = all agents'),
+  },
+  async (args) => {
+    const data = {
+      type: 'save_idea',
+      content: args.content,
+      scope: args.scope,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: `Idea saved (scope: ${args.scope}).` }] };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
