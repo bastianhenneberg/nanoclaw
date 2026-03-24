@@ -16,7 +16,7 @@
  *   const token = await mgr.getAccessToken();
  */
 
-import { logger } from './logger.js';
+import { logger } from '../logger.js';
 
 export interface MicrosoftOAuth2Config {
   clientId: string;

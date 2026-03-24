@@ -17,7 +17,7 @@ import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
-import { sendEmail } from './email-sender.js';
+import { sendEmail } from './integrations/email-sender.js';
 
 /**
  * Write an IPC response file for request/response style IPC calls.
@@ -830,9 +830,7 @@ export async function processTaskIpc(
             comment: (data.comment as string) || undefined,
           });
           writeIpcResponse(sourceGroup, data.requestId, {
-            result: success
-              ? 'Email forwarded successfully'
-              : 'Forward failed',
+            result: success ? 'Email forwarded successfully' : 'Forward failed',
           });
           logger.info(
             {

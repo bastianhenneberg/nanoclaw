@@ -139,7 +139,10 @@ async function callClaude(req: LlmRequest): Promise<LlmResponse> {
   // Ensure proxy env vars are set (once, thread-safe)
   ensureClaudeEnv();
 
-  logger.debug({ model, authMode: detectAuthMode() }, 'Calling Claude via Agent SDK');
+  logger.debug(
+    { model, authMode: detectAuthMode() },
+    'Calling Claude via Agent SDK',
+  );
 
   let resultText = '';
 

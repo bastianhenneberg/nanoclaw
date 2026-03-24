@@ -17,6 +17,7 @@
 ### Refactored
 - Removed dead code `storeMessageDirect` from db.ts (duplicate of `storeMessage`)
 - Extracted `writeIpcResponse` helper in ipc.ts, replacing 4 identical response-writing blocks
+- Moved email-accounts, email-sender, oauth2, paperless-lexoffice into `src/integrations/`
 
 ## v1.3.1 (2026-03-20)
 

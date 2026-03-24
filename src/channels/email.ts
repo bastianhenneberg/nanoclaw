@@ -44,8 +44,8 @@ import { createTransport } from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 
 import { EmailAttachment } from '../types.js';
-import { MicrosoftTokenManager } from '../oauth2.js';
-import { EmailAccountConfig, parseEmailAccounts } from '../email-accounts.js';
+import { MicrosoftTokenManager } from '../integrations/oauth2.js';
+import { EmailAccountConfig, parseEmailAccounts } from '../integrations/email-accounts.js';
 
 import { logger } from '../logger.js';
 import {
@@ -1243,7 +1243,7 @@ export async function forwardEmail(
       : `Fwd: ${original.subject}`;
 
   // 3. Send via SMTP with attachments
-  const { sendEmail: sendEmailFn } = await import('../email-sender.js');
+  const { sendEmail: sendEmailFn } = await import('../integrations/email-sender.js');
 
   // Use nodemailer directly for attachment support
   const accounts = parseEmailAccounts();
@@ -1254,7 +1254,7 @@ export async function forwardEmail(
     throw new Error(`No SMTP config for account: ${params.account}`);
   }
 
-  const { buildSmtpTransport } = await import('../email-sender.js');
+  const { buildSmtpTransport } = await import('../integrations/email-sender.js');
   const transport = await buildSmtpTransport(cfg);
 
   const to = Array.isArray(params.to) ? params.to.join(', ') : params.to;

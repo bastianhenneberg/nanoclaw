@@ -17,8 +17,7 @@ describe('image', () => {
     it('extracts multiple references from one message', () => {
       const messages = [
         {
-          content:
-            '[Image: attachments/a.jpg] and [Image: attachments/b.jpg]',
+          content: '[Image: attachments/a.jpg] and [Image: attachments/b.jpg]',
         },
       ];
       const refs = parseImageReferences(messages);
@@ -38,10 +37,7 @@ describe('image', () => {
     });
 
     it('returns empty array for messages without images', () => {
-      const messages = [
-        { content: 'Just text' },
-        { content: 'More text' },
-      ];
+      const messages = [{ content: 'Just text' }, { content: 'More text' }];
       const refs = parseImageReferences(messages);
       expect(refs).toHaveLength(0);
     });

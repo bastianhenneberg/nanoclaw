@@ -275,7 +275,6 @@ export function storeMessage(msg: NewMessage): void {
   );
 }
 
-
 export function getNewMessages(
   jids: string[],
   lastTimestamp: string,

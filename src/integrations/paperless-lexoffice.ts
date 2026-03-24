@@ -16,8 +16,8 @@
  *   LEXOFFICE_PD_API_KEY       Lexoffice API key for Peppermint Digital
  */
 
-import { readEnvFile } from './env.js';
-import { logger } from './logger.js';
+import { readEnvFile } from '../env.js';
+import { logger } from '../logger.js';
 
 // ---------------------------------------------------------------------------
 // Config (secrets read from .env, not exported)

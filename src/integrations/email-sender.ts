@@ -7,7 +7,7 @@ import { createTransport } from 'nodemailer';
 
 import { parseEmailAccounts, EmailAccountConfig } from './email-accounts.js';
 import { MicrosoftTokenManager } from './oauth2.js';
-import { logger } from './logger.js';
+import { logger } from '../logger.js';
 
 export interface SendEmailOptions {
   to: string | string[];

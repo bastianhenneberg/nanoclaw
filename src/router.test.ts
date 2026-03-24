@@ -2,8 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 
 // Mock timezone module
 vi.mock('./timezone.js', () => ({
-  formatLocalTime: vi.fn(
-    (ts: string, _tz: string) => new Date(ts).toISOString(),
+  formatLocalTime: vi.fn((ts: string, _tz: string) =>
+    new Date(ts).toISOString(),
   ),
 }));
 
@@ -93,9 +93,7 @@ describe('router', () => {
 
   describe('formatOutbound', () => {
     it('strips internal tags and returns text', () => {
-      const result = formatOutbound(
-        'Hello <internal>debug</internal> World',
-      );
+      const result = formatOutbound('Hello <internal>debug</internal> World');
       expect(result).toBe('Hello  World');
     });
 

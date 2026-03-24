@@ -23,7 +23,9 @@ vi.mock('./logger.js', () => ({
 
 // Mock llm-provider
 vi.mock('./llm-provider.js', () => ({
-  callLlm: vi.fn(async () => ({ text: '• User prefers dark mode\n• Project uses TypeScript' })),
+  callLlm: vi.fn(async () => ({
+    text: '• User prefers dark mode\n• Project uses TypeScript',
+  })),
 }));
 
 import {
@@ -162,10 +164,7 @@ describe('memory', () => {
     });
 
     it('counts daily files and total size', () => {
-      fs.writeFileSync(
-        path.join(testGroupDir, 'MEMORY.md'),
-        'Long term facts',
-      );
+      fs.writeFileSync(path.join(testGroupDir, 'MEMORY.md'), 'Long term facts');
       fs.writeFileSync(path.join(testMemDir, '2026-03-20.md'), 'Day 1');
       fs.writeFileSync(path.join(testMemDir, '2026-03-21.md'), 'Day 2');
 

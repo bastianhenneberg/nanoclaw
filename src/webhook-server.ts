@@ -41,14 +41,17 @@ import { WEBHOOK_SECRET } from './config.js';
 import { getAllTasks, getTaskById, updateTask, deleteTask } from './db.js';
 
 const PKG_VERSION = JSON.parse(
-  fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf-8'),
+  fs.readFileSync(
+    path.join(import.meta.dirname, '..', 'package.json'),
+    'utf-8',
+  ),
 ).version as string;
 import { callLlm, LlmProvider } from './llm-provider.js';
 import { logger } from './logger.js';
 import {
   handlePaperlessWebhook,
   isPaperlessLexofficeEnabled,
-} from './paperless-lexoffice.js';
+} from './integrations/paperless-lexoffice.js';
 import { NewMessage, RegisteredGroup, ScheduledTask } from './types.js';
 
 // Skills directory (relative to project root)
