@@ -90,3 +90,12 @@ All notable changes to NanoClaw will be documented in this file.
 
 ## [1.2.0](https://github.com/qwibitai/nanoclaw/compare/v1.1.6...v1.2.0)
 
+
+## 2026-03-24
+
+### Fixed
+- **Health Monitor Zombie Fix**: Task containers are now properly unregistered from the health monitor when they complete. Previously, task containers (scheduled tasks) were registered but never unregistered, causing false "zombie" alerts every health check cycle. Added `onProcessComplete` callback to `SchedulerDependencies`.
+
+### Added
+- **Backup Status Check in Inframonitor**: The `infra-monitor.sh` script now checks if the omarchy restic backup is older than 48 hours and alerts if so.
+
