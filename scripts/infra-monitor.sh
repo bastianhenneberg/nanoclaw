@@ -2,8 +2,6 @@
 # InfraMonitor - Leichter Heartbeat Check
 # Läuft per cron, meldet nur bei Problemen
 
-set -e
-
 # Config
 WEBHOOK_URL="https://forms.proxy.peppermint-digital.com/webhook/inframonitor"
 WEBHOOK_TOKEN="50fb1232cd94562c12fb6c3f317de7623c6460ecbb67a376"
@@ -49,15 +47,9 @@ check_local() {
 # === SSH CHECKS ===
 check_ssh() {
     local name=$1 host=$2 user=$3
-    
-    # Test connection
-    if ! ssh -i "$SSH_KEY" -o ConnectTimeout=10 -o BatchMode=yes "$user@$host" "true" 2>/dev/null; then
-        add_alert "$name: SSH UNREACHABLE"
-        return
-    fi
-    
-    # Remote checks
-    result=$(ssh -i "$SSH_KEY" -o ConnectTimeout=10 "$user@$host" '
+
+    # Single SSH connection: test + checks combined
+    result=$(ssh -i "$SSH_KEY" -o ConnectTimeout=10 -o BatchMode=yes "$user@$host" '
         disk=$(df / | tail -1 | awk "{print \$5}" | tr -d "%")
         mem_total=$(free | grep Mem | awk "{print \$2}")
         mem_used=$(free | grep Mem | awk "{print \$3}")
@@ -66,9 +58,14 @@ check_ssh() {
         nginx=$(systemctl is-active nginx 2>/dev/null || echo "inactive")
         echo "$disk $mem_pct $load $nginx"
     ' 2>/dev/null)
-    
+
+    if [ -z "$result" ]; then
+        add_alert "$name: SSH UNREACHABLE"
+        return
+    fi
+
     read disk mem load nginx <<< "$result"
-    
+
     [ "${disk:-0}" -ge "$DISK_CRIT" ] && add_alert "$name: Disk ${disk}% CRITICAL"
     [ "${disk:-0}" -ge "$DISK_WARN" ] && [ "${disk:-0}" -lt "$DISK_CRIT" ] && add_alert "$name: Disk ${disk}%"
     [ "${mem:-0}" -ge "$MEMORY_WARN" ] && add_alert "$name: Memory ${mem}%"
