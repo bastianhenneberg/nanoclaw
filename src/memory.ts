@@ -89,20 +89,23 @@ async function writeToAiBrain(
   if (!isAiBrainEnabled()) return;
 
   try {
-    const response = await fetchWithTimeout(`${AI_BRAIN_API_URL}/api/v1/agent-memories`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': AI_BRAIN_API_KEY,
+    const response = await fetchWithTimeout(
+      `${AI_BRAIN_API_URL}/api/v1/agent-memories`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': AI_BRAIN_API_KEY,
+        },
+        body: JSON.stringify({
+          agent: AGENT_NAME,
+          group: groupFolder,
+          scope: 'group',
+          type,
+          content,
+        }),
       },
-      body: JSON.stringify({
-        agent: AGENT_NAME,
-        group: groupFolder,
-        scope: 'group',
-        type,
-        content,
-      }),
-    });
+    );
 
     if (!response.ok) {
       logger.warn(
