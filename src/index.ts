@@ -123,9 +123,7 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
  */
 export function getAvailableGroups(): import('./container-runner.js').AvailableGroup[] {
   const chats = getAllChats();
-  const registeredJids = new Set(
-    Object.keys(messageState.registeredGroups),
-  );
+  const registeredJids = new Set(Object.keys(messageState.registeredGroups));
 
   return chats
     .filter((c) => c.jid !== '__group_sync__' && c.is_group)

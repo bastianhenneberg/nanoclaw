@@ -308,8 +308,14 @@ function buildContainerArgs(
   const gitAuthorEmail = gitEnv.GIT_AUTHOR_EMAIL || 'agent@nanoclaw.local';
   args.push('-e', `GIT_AUTHOR_NAME=${gitAuthorName}`);
   args.push('-e', `GIT_AUTHOR_EMAIL=${gitAuthorEmail}`);
-  args.push('-e', `GIT_COMMITTER_NAME=${gitEnv.GIT_COMMITTER_NAME || gitAuthorName}`);
-  args.push('-e', `GIT_COMMITTER_EMAIL=${gitEnv.GIT_COMMITTER_EMAIL || gitAuthorEmail}`);
+  args.push(
+    '-e',
+    `GIT_COMMITTER_NAME=${gitEnv.GIT_COMMITTER_NAME || gitAuthorName}`,
+  );
+  args.push(
+    '-e',
+    `GIT_COMMITTER_EMAIL=${gitEnv.GIT_COMMITTER_EMAIL || gitAuthorEmail}`,
+  );
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
