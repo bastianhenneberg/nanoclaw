@@ -45,7 +45,10 @@ import { ImapFlow } from 'imapflow';
 
 import { EmailAttachment } from '../types.js';
 import { MicrosoftTokenManager } from '../integrations/oauth2.js';
-import { EmailAccountConfig, parseEmailAccounts } from '../integrations/email-accounts.js';
+import {
+  EmailAccountConfig,
+  parseEmailAccounts,
+} from '../integrations/email-accounts.js';
 
 import { logger } from '../logger.js';
 import {
@@ -1243,7 +1246,8 @@ export async function forwardEmail(
       : `Fwd: ${original.subject}`;
 
   // 3. Send via SMTP with attachments
-  const { sendEmail: sendEmailFn } = await import('../integrations/email-sender.js');
+  const { sendEmail: sendEmailFn } =
+    await import('../integrations/email-sender.js');
 
   // Use nodemailer directly for attachment support
   const accounts = parseEmailAccounts();
@@ -1254,7 +1258,8 @@ export async function forwardEmail(
     throw new Error(`No SMTP config for account: ${params.account}`);
   }
 
-  const { buildSmtpTransport } = await import('../integrations/email-sender.js');
+  const { buildSmtpTransport } =
+    await import('../integrations/email-sender.js');
   const transport = await buildSmtpTransport(cfg);
 
   const to = Array.isArray(params.to) ? params.to.join(', ') : params.to;
@@ -1296,6 +1301,434 @@ export async function forwardEmail(
       'Failed to forward email',
     );
     return false;
+  }
+}
+
+// ── List mailboxes (for IPC) ──────────────────────────────────────────────────
+
+export interface ListMailboxesParams {
+  account: string;
+}
+
+export interface MailboxInfo {
+  path: string;
+  name: string;
+  specialUse?: string;
+  delimiter: string;
+  flags: string[];
+}
+
+export async function listMailboxes(
+  params: ListMailboxesParams,
+): Promise<MailboxInfo[]> {
+  const { client } = await createImapClient(params.account);
+
+  try {
+    const mailboxes = await client.list();
+    await client.logout();
+
+    return mailboxes.map((mb) => ({
+      path: mb.path,
+      name: mb.name,
+      specialUse: mb.specialUse || undefined,
+      delimiter: mb.delimiter,
+      flags: mb.flags ? Array.from(mb.flags) : [],
+    }));
+  } catch (err) {
+    try {
+      await client.logout();
+    } catch {}
+    throw err;
+  }
+}
+
+// ── Search emails across folders (for IPC) ────────────────────────────────────
+
+export interface SearchEmailsParams {
+  account: string;
+  query: string; // Search in subject, from, body
+  folders?: string[]; // Folders to search (default: all)
+  limit?: number;
+  includeDeleted?: boolean; // Include Trash folder
+}
+
+export interface SearchEmailResult {
+  uid: number;
+  folder: string;
+  from: string;
+  subject: string;
+  date: string;
+  messageId: string;
+  isUnread: boolean;
+  preview: string;
+}
+
+export async function searchEmails(
+  params: SearchEmailsParams,
+): Promise<SearchEmailResult[]> {
+  const { client, cfg } = await createImapClient(params.account);
+
+  try {
+    const mailboxes = await client.list();
+    const limit = params.limit || 20;
+    const results: SearchEmailResult[] = [];
+
+    // Determine which folders to search
+    let foldersToSearch: string[];
+    if (params.folders && params.folders.length > 0) {
+      foldersToSearch = params.folders;
+    } else {
+      // Search all folders (optionally including Trash)
+      foldersToSearch = mailboxes
+        .filter((mb) => {
+          // Skip non-selectable folders
+          if (mb.flags?.has('\\Noselect')) return false;
+          // Skip Trash unless explicitly requested
+          if (!params.includeDeleted) {
+            if (mb.specialUse === '\\Trash') return false;
+            const lowerPath = mb.path.toLowerCase();
+            if (
+              lowerPath.includes('trash') ||
+              lowerPath.includes('deleted') ||
+              lowerPath.includes('papierkorb')
+            )
+              return false;
+          }
+          return true;
+        })
+        .map((mb) => mb.path);
+    }
+
+    const queryLower = params.query.toLowerCase();
+
+    for (const folder of foldersToSearch) {
+      if (results.length >= limit) break;
+
+      try {
+        await client.mailboxOpen(folder);
+
+        // Get mailbox status
+        const mailboxStatus = client.mailbox;
+        if (!mailboxStatus || mailboxStatus.exists === 0) {
+          continue; // Empty folder
+        }
+
+        // Fetch messages and filter client-side (IMAP search varies by server)
+        const uids = await client.search({ all: true }, { uid: true });
+        if (!uids || uids.length === 0) continue;
+
+        // Check recent messages first (reverse order)
+        for (let i = uids.length - 1; i >= 0 && results.length < limit; i--) {
+          const uid = uids[i];
+          const msg = await client.fetchOne(
+            uid,
+            { envelope: true, flags: true, bodyStructure: true },
+            { uid: true },
+          );
+          if (!msg || typeof msg === 'boolean' || !msg.envelope) continue;
+
+          const env = msg.envelope;
+          const from = env.from?.[0]?.address || '';
+          const subject = env.subject || '';
+
+          // Check if query matches subject or from
+          const matchesSubject = subject.toLowerCase().includes(queryLower);
+          const matchesFrom = from.toLowerCase().includes(queryLower);
+
+          if (!matchesSubject && !matchesFrom) continue;
+
+          // Get body preview
+          let preview = '';
+          const textParts: string[] = [];
+          const htmlParts: string[] = [];
+          const attachParts: MimePart[] = [];
+          walkBodyStructure(
+            msg.bodyStructure,
+            textParts,
+            attachParts,
+            htmlParts,
+          );
+
+          const partsToTry = textParts.length > 0 ? textParts : htmlParts;
+          for (const partNum of partsToTry.slice(0, 1)) {
+            try {
+              const dl = await client.download(String(uid), partNum, {
+                uid: true,
+              });
+              if (dl?.content) {
+                const chunks: Buffer[] = [];
+                for await (const chunk of dl.content) {
+                  chunks.push(
+                    Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
+                  );
+                }
+                preview = Buffer.concat(chunks).toString('utf-8');
+                if (textParts.length === 0 && htmlParts.length > 0) {
+                  preview = htmlToPlainText(preview);
+                }
+              }
+            } catch {}
+          }
+
+          results.push({
+            uid: Number(uid),
+            folder,
+            from,
+            subject,
+            date: env.date ? new Date(env.date).toISOString() : '',
+            messageId: env.messageId || '',
+            isUnread: !msg.flags?.has('\\Seen'),
+            preview: preview.replace(/\n/g, ' ').slice(0, 200),
+          });
+        }
+      } catch (err) {
+        logger.debug({ folder, err }, 'Error searching folder');
+        continue;
+      }
+    }
+
+    await client.logout();
+    return results;
+  } catch (err) {
+    try {
+      await client.logout();
+    } catch {}
+    throw err;
+  }
+}
+
+// ── Move email between folders (for IPC) ──────────────────────────────────────
+
+export interface MoveEmailParams {
+  account: string;
+  uid: number;
+  fromFolder: string;
+  toFolder: string;
+}
+
+export async function moveEmail(params: MoveEmailParams): Promise<boolean> {
+  const { client } = await createImapClient(params.account);
+
+  try {
+    await client.mailboxOpen(params.fromFolder);
+
+    const uid = String(params.uid);
+
+    // Verify message exists
+    const msg = await client.fetchOne(uid, { envelope: true }, { uid: true });
+    if (!msg || typeof msg === 'boolean') {
+      await client.logout();
+      throw new Error(
+        `Email UID ${params.uid} not found in ${params.fromFolder}`,
+      );
+    }
+
+    // Move to target folder
+    await client.messageMove(uid, params.toFolder, { uid: true });
+
+    logger.info(
+      {
+        account: params.account,
+        uid: params.uid,
+        from: params.fromFolder,
+        to: params.toFolder,
+      },
+      'Email moved',
+    );
+
+    await client.logout();
+    return true;
+  } catch (err) {
+    try {
+      await client.logout();
+    } catch {}
+    throw err;
+  }
+}
+
+// ── Reply to email (for IPC) ──────────────────────────────────────────────────
+
+export interface ReplyEmailParams {
+  account: string;
+  uid: number;
+  body: string;
+  folder?: string;
+  html?: string;
+}
+
+export async function replyEmail(params: ReplyEmailParams): Promise<boolean> {
+  // 1. Read original email to get threading info
+  const original = await readEmail({
+    account: params.account,
+    uid: params.uid,
+    folder: params.folder,
+  });
+
+  // 2. Build reply subject
+  const replySubject =
+    original.subject.toLowerCase().startsWith('re:')
+      ? original.subject
+      : `Re: ${original.subject}`;
+
+  // 3. Get SMTP config
+  const accounts = parseEmailAccounts();
+  const cfg = accounts.find(
+    (a) => a.address.toLowerCase() === params.account.toLowerCase(),
+  );
+  if (!cfg || !cfg.smtpHost) {
+    throw new Error(`No SMTP config for account: ${params.account}`);
+  }
+
+  const { buildSmtpTransport } = await import('../integrations/email-sender.js');
+  const transport = await buildSmtpTransport(cfg);
+
+  const mailOptions: any = {
+    from: cfg.fromAddress || cfg.address,
+    to: original.from,
+    subject: replySubject,
+    text: params.body,
+    inReplyTo: original.messageId,
+    references: original.messageId,
+  };
+
+  if (params.html) {
+    mailOptions.html = params.html;
+  }
+
+  try {
+    await transport.sendMail(mailOptions);
+    logger.info(
+      {
+        to: original.from,
+        subject: replySubject,
+        account: params.account,
+        inReplyTo: original.messageId,
+      },
+      'Email reply sent with threading',
+    );
+    return true;
+  } catch (err) {
+    logger.error(
+      { err, to: original.from, subject: replySubject, account: params.account },
+      'Failed to send email reply',
+    );
+    return false;
+  }
+}
+
+// ── Flag email (for IPC) ──────────────────────────────────────────────────────
+
+export interface FlagEmailParams {
+  account: string;
+  uid: number;
+  folder?: string;
+  flag: 'flagged' | 'unflagged';
+}
+
+export async function flagEmail(params: FlagEmailParams): Promise<boolean> {
+  const { client, cfg } = await createImapClient(params.account);
+
+  try {
+    const folder = params.folder || cfg.imapMailbox;
+    await client.mailboxOpen(folder);
+
+    const uid = String(params.uid);
+
+    if (params.flag === 'flagged') {
+      await client.messageFlagsAdd(uid, ['\\Flagged'], { uid: true });
+    } else {
+      await client.messageFlagsRemove(uid, ['\\Flagged'], { uid: true });
+    }
+
+    logger.info(
+      { account: params.account, uid: params.uid, flag: params.flag },
+      'Email flag updated',
+    );
+
+    await client.logout();
+    return true;
+  } catch (err) {
+    try {
+      await client.logout();
+    } catch {}
+    throw err;
+  }
+}
+
+// ── Copy email (for IPC) ──────────────────────────────────────────────────────
+
+export interface CopyEmailParams {
+  account: string;
+  uid: number;
+  fromFolder: string;
+  toFolder: string;
+}
+
+export async function copyEmail(params: CopyEmailParams): Promise<boolean> {
+  const { client } = await createImapClient(params.account);
+
+  try {
+    await client.mailboxOpen(params.fromFolder);
+
+    const uid = String(params.uid);
+
+    // Verify message exists
+    const msg = await client.fetchOne(uid, { envelope: true }, { uid: true });
+    if (!msg || typeof msg === 'boolean') {
+      await client.logout();
+      throw new Error(
+        `Email UID ${params.uid} not found in ${params.fromFolder}`,
+      );
+    }
+
+    // Copy to target folder
+    await client.messageCopy(uid, params.toFolder, { uid: true });
+
+    logger.info(
+      {
+        account: params.account,
+        uid: params.uid,
+        from: params.fromFolder,
+        to: params.toFolder,
+      },
+      'Email copied',
+    );
+
+    await client.logout();
+    return true;
+  } catch (err) {
+    try {
+      await client.logout();
+    } catch {}
+    throw err;
+  }
+}
+
+// ── Create folder (for IPC) ───────────────────────────────────────────────────
+
+export interface CreateFolderParams {
+  account: string;
+  folderPath: string;
+}
+
+export async function createFolder(params: CreateFolderParams): Promise<boolean> {
+  const { client } = await createImapClient(params.account);
+
+  try {
+    await client.mailboxCreate(params.folderPath);
+
+    logger.info(
+      { account: params.account, folder: params.folderPath },
+      'Folder created',
+    );
+
+    await client.logout();
+    return true;
+  } catch (err) {
+    try {
+      await client.logout();
+    } catch {}
+    throw err;
   }
 }
 

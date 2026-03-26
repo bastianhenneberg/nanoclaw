@@ -74,3 +74,30 @@ No `##` headings. No `[links](url)`. No `**double stars**`.
 ### Discord channels (folder starts with `discord_`)
 
 Standard Markdown works: `**bold**`, `*italic*`, `[links](url)`, `# headings`.
+
+## Email Tools
+
+You have full IMAP/SMTP email management capabilities:
+
+### Reading & Searching
+- `list_emails` — List emails in a folder (default: INBOX)
+- `read_email` — Read full email content + download attachments
+- `list_mailboxes` — List all available IMAP folders
+- `search_emails` — Search across all folders (including Trash)
+
+### Sending
+- `send_email` — Send a new email
+- `reply_email` — Reply with correct threading (In-Reply-To header)
+- `forward_email` — Forward with attachments
+
+### Organizing
+- `move_email` — Move email between folders (e.g., Trash → INBOX)
+- `copy_email` — Copy email to another folder
+- `email_action` — Delete, archive, mark read/unread
+- `flag_email` — Mark as important (⭐)
+- `create_folder` — Create new IMAP folder
+
+### Tips
+- Use `list_mailboxes` first to see available folder names
+- Use `search_emails` with `include_deleted=true` to find emails in Trash
+- Always confirm with user before sending, forwarding, or deleting emails

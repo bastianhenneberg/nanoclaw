@@ -445,6 +445,17 @@ export async function processTaskIpc(
     // For read_email / forward_email
     uid?: number;
     comment?: string;
+    // For search_emails
+    query?: string;
+    folders?: string[];
+    includeDeleted?: boolean;
+    // For move_email / copy_email
+    fromFolder?: string;
+    toFolder?: string;
+    // For flag_email
+    flag?: string;
+    // For create_folder
+    folderPath?: string;
     // For save_idea
     content?: string;
     scope?: string;
@@ -906,6 +917,266 @@ export async function processTaskIpc(
           { data },
           'Invalid email_action request - missing action, messageId, or account',
         );
+      }
+      break;
+
+    case 'list_mailboxes':
+      // List all IMAP folders for an account
+      if (data.account && data.requestId) {
+        try {
+          const { listMailboxes } = await import('./channels/email.js');
+          const mailboxes = await listMailboxes({
+            account: data.account as string,
+          });
+          const lines = ['📁 Available folders:', ''];
+          for (const mb of mailboxes) {
+            const specialUse = mb.specialUse ? ` (${mb.specialUse})` : '';
+            lines.push(`• ${mb.path}${specialUse}`);
+          }
+          writeIpcResponse(sourceGroup, data.requestId, {
+            result: lines.join('\n'),
+          });
+          logger.info(
+            { sourceGroup, account: data.account, count: mailboxes.length },
+            'Mailboxes listed via IPC',
+          );
+        } catch (err) {
+          writeIpcResponse(sourceGroup, data.requestId, {
+            error: String(err),
+          });
+          logger.error(
+            { sourceGroup, account: data.account, err },
+            'Error listing mailboxes',
+          );
+        }
+      }
+      break;
+
+    case 'search_emails':
+      // Search emails across folders
+      if (data.account && data.requestId) {
+        try {
+          const { searchEmails } = await import('./channels/email.js');
+          const results = await searchEmails({
+            account: data.account as string,
+            query: (data.query as string) || '',
+            folders: data.folders as string[] | undefined,
+            limit: (data.limit as number) || 20,
+            includeDeleted: (data.includeDeleted as boolean) || false,
+          });
+
+          if (results.length === 0) {
+            writeIpcResponse(sourceGroup, data.requestId, {
+              result: 'No emails found matching your search.',
+            });
+          } else {
+            const lines = [
+              `🔍 Found ${results.length} email(s) for "${data.query}":`,
+              '',
+            ];
+            for (const email of results) {
+              const marker = email.isUnread ? '🔵' : '⚪';
+              lines.push(`${marker} **${email.subject}**`);
+              lines.push(`   From: ${email.from}`);
+              lines.push(
+                `   Date: ${email.date ? new Date(email.date).toLocaleString('de-DE') : 'n/a'}`,
+              );
+              lines.push(`   Folder: ${email.folder}`);
+              lines.push(`   IMAP-UID: ${email.uid}`);
+              if (email.preview) {
+                lines.push(`   Preview: ${email.preview.slice(0, 150)}...`);
+              }
+              lines.push('');
+            }
+            writeIpcResponse(sourceGroup, data.requestId, {
+              result: lines.join('\n'),
+            });
+          }
+          logger.info(
+            {
+              sourceGroup,
+              account: data.account,
+              query: data.query,
+              count: results.length,
+            },
+            'Email search completed via IPC',
+          );
+        } catch (err) {
+          writeIpcResponse(sourceGroup, data.requestId, {
+            error: String(err),
+          });
+          logger.error(
+            { sourceGroup, account: data.account, query: data.query, err },
+            'Error searching emails',
+          );
+        }
+      }
+      break;
+
+    case 'move_email':
+      // Move email between folders
+      if (data.account && data.uid && data.fromFolder && data.toFolder && data.requestId) {
+        try {
+          const { moveEmail } = await import('./channels/email.js');
+          await moveEmail({
+            account: data.account as string,
+            uid: data.uid as number,
+            fromFolder: data.fromFolder as string,
+            toFolder: data.toFolder as string,
+          });
+          writeIpcResponse(sourceGroup, data.requestId, {
+            result: `Email moved from ${data.fromFolder} to ${data.toFolder}`,
+          });
+          logger.info(
+            {
+              sourceGroup,
+              account: data.account,
+              uid: data.uid,
+              fromFolder: data.fromFolder,
+              toFolder: data.toFolder,
+            },
+            'Email moved via IPC',
+          );
+        } catch (err) {
+          writeIpcResponse(sourceGroup, data.requestId, {
+            error: String(err),
+          });
+          logger.error(
+            {
+              sourceGroup,
+              account: data.account,
+              uid: data.uid,
+              err,
+            },
+            'Error moving email',
+          );
+        }
+      }
+      break;
+
+    case 'reply_email':
+      // Reply to an email with correct threading
+      if (data.account && data.uid && data.body && data.requestId) {
+        try {
+          const { replyEmail } = await import('./channels/email.js');
+          await replyEmail({
+            account: data.account as string,
+            uid: data.uid as number,
+            body: data.body as string,
+            folder: (data.folder as string) || undefined,
+            html: (data.html as string) || undefined,
+          });
+          writeIpcResponse(sourceGroup, data.requestId, {
+            result: 'Reply sent successfully',
+          });
+          logger.info(
+            { sourceGroup, account: data.account, uid: data.uid },
+            'Email reply sent via IPC',
+          );
+        } catch (err) {
+          writeIpcResponse(sourceGroup, data.requestId, {
+            error: String(err),
+          });
+          logger.error(
+            { sourceGroup, account: data.account, uid: data.uid, err },
+            'Error sending email reply',
+          );
+        }
+      }
+      break;
+
+    case 'flag_email':
+      // Flag or unflag an email
+      if (data.account && data.uid && data.flag && data.requestId) {
+        try {
+          const { flagEmail } = await import('./channels/email.js');
+          await flagEmail({
+            account: data.account as string,
+            uid: data.uid as number,
+            folder: (data.folder as string) || undefined,
+            flag: data.flag as 'flagged' | 'unflagged',
+          });
+          const action = data.flag === 'flagged' ? 'flagged' : 'unflagged';
+          writeIpcResponse(sourceGroup, data.requestId, {
+            result: `Email ${action}`,
+          });
+          logger.info(
+            { sourceGroup, account: data.account, uid: data.uid, flag: data.flag },
+            'Email flag updated via IPC',
+          );
+        } catch (err) {
+          writeIpcResponse(sourceGroup, data.requestId, {
+            error: String(err),
+          });
+          logger.error(
+            { sourceGroup, account: data.account, uid: data.uid, err },
+            'Error flagging email',
+          );
+        }
+      }
+      break;
+
+    case 'copy_email':
+      // Copy email to another folder
+      if (data.account && data.uid && data.fromFolder && data.toFolder && data.requestId) {
+        try {
+          const { copyEmail } = await import('./channels/email.js');
+          await copyEmail({
+            account: data.account as string,
+            uid: data.uid as number,
+            fromFolder: data.fromFolder as string,
+            toFolder: data.toFolder as string,
+          });
+          writeIpcResponse(sourceGroup, data.requestId, {
+            result: `Email copied from ${data.fromFolder} to ${data.toFolder}`,
+          });
+          logger.info(
+            {
+              sourceGroup,
+              account: data.account,
+              uid: data.uid,
+              fromFolder: data.fromFolder,
+              toFolder: data.toFolder,
+            },
+            'Email copied via IPC',
+          );
+        } catch (err) {
+          writeIpcResponse(sourceGroup, data.requestId, {
+            error: String(err),
+          });
+          logger.error(
+            { sourceGroup, account: data.account, uid: data.uid, err },
+            'Error copying email',
+          );
+        }
+      }
+      break;
+
+    case 'create_folder':
+      // Create a new IMAP folder
+      if (data.account && data.folderPath && data.requestId) {
+        try {
+          const { createFolder } = await import('./channels/email.js');
+          await createFolder({
+            account: data.account as string,
+            folderPath: data.folderPath as string,
+          });
+          writeIpcResponse(sourceGroup, data.requestId, {
+            result: `Folder "${data.folderPath}" created`,
+          });
+          logger.info(
+            { sourceGroup, account: data.account, folderPath: data.folderPath },
+            'Folder created via IPC',
+          );
+        } catch (err) {
+          writeIpcResponse(sourceGroup, data.requestId, {
+            error: String(err),
+          });
+          logger.error(
+            { sourceGroup, account: data.account, folderPath: data.folderPath, err },
+            'Error creating folder',
+          );
+        }
       }
       break;
 

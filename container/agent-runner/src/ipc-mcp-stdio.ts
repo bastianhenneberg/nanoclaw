@@ -789,6 +789,369 @@ IMPORTANT: Always confirm with the user before sending an email! Show them the r
 );
 
 server.tool(
+  'list_mailboxes',
+  `List all IMAP folders/mailboxes for an email account. Use this to discover available folders like Trash, Archive, Sent, etc.`,
+  {
+    account: z.string().describe('Email account address (e.g., "info@crewtex.de")'),
+  },
+  async (args) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const data = {
+      type: 'list_mailboxes',
+      account: args.account,
+      groupFolder,
+      requestId,
+      timestamp: new Date().toISOString(),
+    };
+
+    const requestFile = path.join(TASKS_DIR, `${requestId}.json`);
+    const responseFile = path.join(IPC_DIR, 'responses', `${requestId}.json`);
+
+    fs.mkdirSync(path.join(IPC_DIR, 'responses'), { recursive: true });
+    fs.writeFileSync(requestFile, JSON.stringify(data));
+
+    // Poll for response (max 15 seconds)
+    const maxWait = 15000;
+    const pollInterval = 200;
+    let waited = 0;
+
+    while (waited < maxWait) {
+      if (fs.existsSync(responseFile)) {
+        const response = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
+        fs.unlinkSync(responseFile);
+
+        if (response.error) {
+          return { content: [{ type: 'text' as const, text: `Error: ${response.error}` }], isError: true };
+        }
+
+        return { content: [{ type: 'text' as const, text: response.result }] };
+      }
+      await new Promise(r => setTimeout(r, pollInterval));
+      waited += pollInterval;
+    }
+
+    return { content: [{ type: 'text' as const, text: 'Timeout waiting for mailbox list' }], isError: true };
+  },
+);
+
+server.tool(
+  'search_emails',
+  `Search for emails across all folders. Use this to find emails that may have been archived, deleted, or moved.
+This is useful when:
+- Looking for an email that was previously processed and archived/deleted
+- Finding emails by subject or sender across all folders
+- Recovering emails from Trash`,
+  {
+    account: z.string().describe('Email account address (e.g., "info@crewtex.de")'),
+    query: z.string().describe('Search text (matches subject and sender)'),
+    folders: z.array(z.string()).optional().describe('Specific folders to search (default: all folders)'),
+    limit: z.number().optional().describe('Max results to return (default: 20)'),
+    include_deleted: z.boolean().optional().describe('Include Trash/Deleted Items folder in search (default: false)'),
+  },
+  async (args) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const data = {
+      type: 'search_emails',
+      account: args.account,
+      query: args.query,
+      folders: args.folders,
+      limit: args.limit || 20,
+      includeDeleted: args.include_deleted || false,
+      groupFolder,
+      requestId,
+      timestamp: new Date().toISOString(),
+    };
+
+    const requestFile = path.join(TASKS_DIR, `${requestId}.json`);
+    const responseFile = path.join(IPC_DIR, 'responses', `${requestId}.json`);
+
+    fs.mkdirSync(path.join(IPC_DIR, 'responses'), { recursive: true });
+    fs.writeFileSync(requestFile, JSON.stringify(data));
+
+    // Poll for response (max 60 seconds - searching multiple folders takes time)
+    const maxWait = 60000;
+    const pollInterval = 300;
+    let waited = 0;
+
+    while (waited < maxWait) {
+      if (fs.existsSync(responseFile)) {
+        const response = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
+        fs.unlinkSync(responseFile);
+
+        if (response.error) {
+          return { content: [{ type: 'text' as const, text: `Error: ${response.error}` }], isError: true };
+        }
+
+        return { content: [{ type: 'text' as const, text: response.result }] };
+      }
+      await new Promise(r => setTimeout(r, pollInterval));
+      waited += pollInterval;
+    }
+
+    return { content: [{ type: 'text' as const, text: 'Timeout waiting for email search' }], isError: true };
+  },
+);
+
+server.tool(
+  'move_email',
+  `Move an email from one IMAP folder to another. Use this to:
+- Restore emails from Trash back to INBOX
+- Move emails to Archive
+- Organize emails into specific folders
+IMPORTANT: Use list_mailboxes first to see available folder names!`,
+  {
+    account: z.string().describe('Email account address (e.g., "info@crewtex.de")'),
+    uid: z.number().describe('IMAP UID of the email to move'),
+    from_folder: z.string().describe('Source folder (e.g., "Deleted Items", "Trash", "INBOX")'),
+    to_folder: z.string().describe('Target folder (e.g., "INBOX", "Archive")'),
+  },
+  async (args) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const data = {
+      type: 'move_email',
+      account: args.account,
+      uid: args.uid,
+      fromFolder: args.from_folder,
+      toFolder: args.to_folder,
+      groupFolder,
+      requestId,
+      timestamp: new Date().toISOString(),
+    };
+
+    const requestFile = path.join(TASKS_DIR, `${requestId}.json`);
+    const responseFile = path.join(IPC_DIR, 'responses', `${requestId}.json`);
+
+    fs.mkdirSync(path.join(IPC_DIR, 'responses'), { recursive: true });
+    fs.writeFileSync(requestFile, JSON.stringify(data));
+
+    // Poll for response (max 30 seconds)
+    const maxWait = 30000;
+    const pollInterval = 200;
+    let waited = 0;
+
+    while (waited < maxWait) {
+      if (fs.existsSync(responseFile)) {
+        const response = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
+        fs.unlinkSync(responseFile);
+
+        if (response.error) {
+          return { content: [{ type: 'text' as const, text: `Error: ${response.error}` }], isError: true };
+        }
+
+        return { content: [{ type: 'text' as const, text: `✅ ${response.result}` }] };
+      }
+      await new Promise(r => setTimeout(r, pollInterval));
+      waited += pollInterval;
+    }
+
+    return { content: [{ type: 'text' as const, text: 'Timeout waiting for email move' }], isError: true };
+  },
+);
+
+server.tool(
+  'reply_email',
+  `Reply to an email with correct threading (In-Reply-To header). This ensures the reply appears in the same email thread.
+IMPORTANT: Always confirm with the user before sending!`,
+  {
+    account: z.string().describe('Email account address (e.g., "info@crewtex.de")'),
+    uid: z.number().describe('IMAP UID of the email to reply to'),
+    body: z.string().describe('Reply message body (plain text)'),
+    folder: z.string().optional().describe('IMAP folder where the email is (default: INBOX)'),
+    html: z.string().optional().describe('HTML version of the reply (optional)'),
+  },
+  async (args) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const data = {
+      type: 'reply_email',
+      account: args.account,
+      uid: args.uid,
+      body: args.body,
+      folder: args.folder,
+      html: args.html,
+      groupFolder,
+      requestId,
+      timestamp: new Date().toISOString(),
+    };
+
+    const requestFile = path.join(TASKS_DIR, `${requestId}.json`);
+    const responseFile = path.join(IPC_DIR, 'responses', `${requestId}.json`);
+
+    fs.mkdirSync(path.join(IPC_DIR, 'responses'), { recursive: true });
+    fs.writeFileSync(requestFile, JSON.stringify(data));
+
+    const maxWait = 30000;
+    const pollInterval = 200;
+    let waited = 0;
+
+    while (waited < maxWait) {
+      if (fs.existsSync(responseFile)) {
+        const response = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
+        fs.unlinkSync(responseFile);
+
+        if (response.error) {
+          return { content: [{ type: 'text' as const, text: `Error: ${response.error}` }], isError: true };
+        }
+
+        return { content: [{ type: 'text' as const, text: `✅ ${response.result}` }] };
+      }
+      await new Promise(r => setTimeout(r, pollInterval));
+      waited += pollInterval;
+    }
+
+    return { content: [{ type: 'text' as const, text: 'Timeout waiting for reply to send' }], isError: true };
+  },
+);
+
+server.tool(
+  'flag_email',
+  `Flag or unflag an email (mark as important/starred). Use this to highlight important emails.`,
+  {
+    account: z.string().describe('Email account address (e.g., "info@crewtex.de")'),
+    uid: z.number().describe('IMAP UID of the email'),
+    flag: z.enum(['flagged', 'unflagged']).describe('Set "flagged" to mark as important, "unflagged" to remove'),
+    folder: z.string().optional().describe('IMAP folder (default: INBOX)'),
+  },
+  async (args) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const data = {
+      type: 'flag_email',
+      account: args.account,
+      uid: args.uid,
+      flag: args.flag,
+      folder: args.folder,
+      groupFolder,
+      requestId,
+      timestamp: new Date().toISOString(),
+    };
+
+    const requestFile = path.join(TASKS_DIR, `${requestId}.json`);
+    const responseFile = path.join(IPC_DIR, 'responses', `${requestId}.json`);
+
+    fs.mkdirSync(path.join(IPC_DIR, 'responses'), { recursive: true });
+    fs.writeFileSync(requestFile, JSON.stringify(data));
+
+    const maxWait = 15000;
+    const pollInterval = 200;
+    let waited = 0;
+
+    while (waited < maxWait) {
+      if (fs.existsSync(responseFile)) {
+        const response = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
+        fs.unlinkSync(responseFile);
+
+        if (response.error) {
+          return { content: [{ type: 'text' as const, text: `Error: ${response.error}` }], isError: true };
+        }
+
+        return { content: [{ type: 'text' as const, text: `⭐ ${response.result}` }] };
+      }
+      await new Promise(r => setTimeout(r, pollInterval));
+      waited += pollInterval;
+    }
+
+    return { content: [{ type: 'text' as const, text: 'Timeout waiting for flag update' }], isError: true };
+  },
+);
+
+server.tool(
+  'copy_email',
+  `Copy an email to another folder (keeps the original). Use this to duplicate emails for backup or organization.`,
+  {
+    account: z.string().describe('Email account address (e.g., "info@crewtex.de")'),
+    uid: z.number().describe('IMAP UID of the email to copy'),
+    from_folder: z.string().describe('Source folder'),
+    to_folder: z.string().describe('Target folder'),
+  },
+  async (args) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const data = {
+      type: 'copy_email',
+      account: args.account,
+      uid: args.uid,
+      fromFolder: args.from_folder,
+      toFolder: args.to_folder,
+      groupFolder,
+      requestId,
+      timestamp: new Date().toISOString(),
+    };
+
+    const requestFile = path.join(TASKS_DIR, `${requestId}.json`);
+    const responseFile = path.join(IPC_DIR, 'responses', `${requestId}.json`);
+
+    fs.mkdirSync(path.join(IPC_DIR, 'responses'), { recursive: true });
+    fs.writeFileSync(requestFile, JSON.stringify(data));
+
+    const maxWait = 30000;
+    const pollInterval = 200;
+    let waited = 0;
+
+    while (waited < maxWait) {
+      if (fs.existsSync(responseFile)) {
+        const response = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
+        fs.unlinkSync(responseFile);
+
+        if (response.error) {
+          return { content: [{ type: 'text' as const, text: `Error: ${response.error}` }], isError: true };
+        }
+
+        return { content: [{ type: 'text' as const, text: `📋 ${response.result}` }] };
+      }
+      await new Promise(r => setTimeout(r, pollInterval));
+      waited += pollInterval;
+    }
+
+    return { content: [{ type: 'text' as const, text: 'Timeout waiting for copy' }], isError: true };
+  },
+);
+
+server.tool(
+  'create_folder',
+  `Create a new IMAP folder/mailbox. Use this to organize emails into custom folders.`,
+  {
+    account: z.string().describe('Email account address (e.g., "info@crewtex.de")'),
+    folder_path: z.string().describe('Folder path to create (e.g., "Projects/2026" or "Kunden/Wichtig")'),
+  },
+  async (args) => {
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const data = {
+      type: 'create_folder',
+      account: args.account,
+      folderPath: args.folder_path,
+      groupFolder,
+      requestId,
+      timestamp: new Date().toISOString(),
+    };
+
+    const requestFile = path.join(TASKS_DIR, `${requestId}.json`);
+    const responseFile = path.join(IPC_DIR, 'responses', `${requestId}.json`);
+
+    fs.mkdirSync(path.join(IPC_DIR, 'responses'), { recursive: true });
+    fs.writeFileSync(requestFile, JSON.stringify(data));
+
+    const maxWait = 15000;
+    const pollInterval = 200;
+    let waited = 0;
+
+    while (waited < maxWait) {
+      if (fs.existsSync(responseFile)) {
+        const response = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
+        fs.unlinkSync(responseFile);
+
+        if (response.error) {
+          return { content: [{ type: 'text' as const, text: `Error: ${response.error}` }], isError: true };
+        }
+
+        return { content: [{ type: 'text' as const, text: `📁 ${response.result}` }] };
+      }
+      await new Promise(r => setTimeout(r, pollInterval));
+      waited += pollInterval;
+    }
+
+    return { content: [{ type: 'text' as const, text: 'Timeout waiting for folder creation' }], isError: true };
+  },
+);
+
+server.tool(
   'list_ideas',
   `List saved ideas. Returns all ideas stored for this group/agent. Use this to recall previously saved ideas, check what ideas exist, or reference them in conversations.`,
   {
