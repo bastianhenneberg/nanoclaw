@@ -12,17 +12,15 @@ const MAX_IPC_FILES_PER_CYCLE = 100;
  * Safely read an IPC JSON file. Rejects symlinks, oversized files,
  * and invalid JSON. Returns null if the file should be skipped.
  */
-function safeReadIpcJson(filePath: string): unknown | null {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function safeReadIpcJson(filePath: string): any | null {
   const stat = fs.lstatSync(filePath);
   if (stat.isSymbolicLink()) {
     logger.warn({ filePath }, 'Rejecting symlinked IPC file');
     return null;
   }
   if (stat.size > MAX_IPC_FILE_SIZE) {
-    logger.warn(
-      { filePath, size: stat.size },
-      'Rejecting oversized IPC file',
-    );
+    logger.warn({ filePath, size: stat.size }, 'Rejecting oversized IPC file');
     return null;
   }
   return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
