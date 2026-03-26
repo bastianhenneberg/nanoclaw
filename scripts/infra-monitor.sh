@@ -121,7 +121,7 @@ check_local
 check_backup
 check_ssh "bold-tokyo" "178.104.23.247" "forge" true
 check_ssh "coolify-instanz" "188.245.53.38" "root" false  # Coolify uses own proxy, no nginx
-check_ping "kiserver" "192.168.1.147"  # No SSH access from monitoring, ping only
+check_ssh "kiserver" "192.168.1.147" "bastian" false  # No nginx on kiserver
 
 # === REPORT ===
 if [ -n "$alerts" ]; then
