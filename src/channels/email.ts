@@ -1565,10 +1565,9 @@ export async function replyEmail(params: ReplyEmailParams): Promise<boolean> {
   });
 
   // 2. Build reply subject
-  const replySubject =
-    original.subject.toLowerCase().startsWith('re:')
-      ? original.subject
-      : `Re: ${original.subject}`;
+  const replySubject = original.subject.toLowerCase().startsWith('re:')
+    ? original.subject
+    : `Re: ${original.subject}`;
 
   // 3. Get SMTP config
   const accounts = parseEmailAccounts();
@@ -1579,7 +1578,8 @@ export async function replyEmail(params: ReplyEmailParams): Promise<boolean> {
     throw new Error(`No SMTP config for account: ${params.account}`);
   }
 
-  const { buildSmtpTransport } = await import('../integrations/email-sender.js');
+  const { buildSmtpTransport } =
+    await import('../integrations/email-sender.js');
   const transport = await buildSmtpTransport(cfg);
 
   const mailOptions: any = {
@@ -1609,7 +1609,12 @@ export async function replyEmail(params: ReplyEmailParams): Promise<boolean> {
     return true;
   } catch (err) {
     logger.error(
-      { err, to: original.from, subject: replySubject, account: params.account },
+      {
+        err,
+        to: original.from,
+        subject: replySubject,
+        account: params.account,
+      },
       'Failed to send email reply',
     );
     return false;
@@ -1711,7 +1716,9 @@ export interface CreateFolderParams {
   folderPath: string;
 }
 
-export async function createFolder(params: CreateFolderParams): Promise<boolean> {
+export async function createFolder(
+  params: CreateFolderParams,
+): Promise<boolean> {
   const { client } = await createImapClient(params.account);
 
   try {
