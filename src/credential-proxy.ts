@@ -23,6 +23,18 @@ export interface ProxyConfig {
   authMode: AuthMode;
 }
 
+/**
+ * Integration secrets that containers can request via GET /nanoclaw/secrets.
+ * Loaded once at proxy startup so containers never receive them via env vars.
+ */
+const INTEGRATION_SECRET_KEYS = [
+  'PEPPERMINT_API_TOKEN',
+  'AI_BRAIN_TOKEN',
+  'VERWALTUNG_API_TOKEN',
+  'PAPERLESS_API_TOKEN',
+  'PAPERLESS_API_URL',
+] as const;
+
 export function startCredentialProxy(
   port: number,
   host = '127.0.0.1',
@@ -32,6 +44,7 @@ export function startCredentialProxy(
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',
+    ...INTEGRATION_SECRET_KEYS,
   ]);
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
@@ -44,8 +57,22 @@ export function startCredentialProxy(
   const isHttps = upstreamUrl.protocol === 'https:';
   const makeRequest = isHttps ? httpsRequest : httpRequest;
 
+  // Build integration secrets object (only non-empty values)
+  const integrationSecrets: Record<string, string> = {};
+  for (const key of INTEGRATION_SECRET_KEYS) {
+    if (secrets[key]) integrationSecrets[key] = secrets[key];
+  }
+
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
+      // Secrets endpoint: containers fetch integration tokens from here
+      // instead of receiving them via environment variables.
+      if (req.method === 'GET' && req.url === '/nanoclaw/secrets') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(integrationSecrets));
+        return;
+      }
+
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {

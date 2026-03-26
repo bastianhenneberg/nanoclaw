@@ -272,26 +272,9 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
-  // Pass integration secrets if configured (read once from .env)
-  const secrets = readEnvFile([
-    'PEPPERMINT_API_TOKEN',
-    'AI_BRAIN_TOKEN',
-    'VERWALTUNG_API_TOKEN',
-    'PAPERLESS_API_TOKEN',
-    'PAPERLESS_API_URL',
-  ]);
-  const secretPassthrough: [string, string | undefined][] = [
-    ['PEPPERMINT_API_TOKEN', secrets.PEPPERMINT_API_TOKEN],
-    ['AI_BRAIN_TOKEN', secrets.AI_BRAIN_TOKEN],
-    ['VERWALTUNG_API_TOKEN', secrets.VERWALTUNG_API_TOKEN],
-    ['PAPERLESS_API_TOKEN', secrets.PAPERLESS_API_TOKEN],
-  ];
-  for (const [key, value] of secretPassthrough) {
-    if (value) args.push('-e', `${key}=${value}`);
-  }
-  if (secrets.PAPERLESS_API_TOKEN) {
-    args.push('-e', `PAPERLESS_API_URL=${secrets.PAPERLESS_API_URL || ''}`);
-  }
+  // Integration secrets are served by the credential proxy at /nanoclaw/secrets.
+  // Containers fetch them at startup — no secrets in env vars.
+  // ANTHROPIC_BASE_URL already points to the proxy, so containers can derive the URL.
 
   // Pass host groups directory so agents can resolve container paths to host paths
   // (used for passing screenshot paths to external MCP servers like ai-brain)
