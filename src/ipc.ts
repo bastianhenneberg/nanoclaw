@@ -1,9 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { CronExpressionParser } from 'cron-parser';
-
-import { DATA_DIR, GROUPS_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { DATA_DIR, GROUPS_DIR, IPC_POLL_INTERVAL } from './config.js';
 import {
   sendPoolMessage,
   sendPoolPhoto,
@@ -12,52 +10,43 @@ import {
   sendPoolAudio,
   sendPoolVoice,
 } from './channels/telegram.js';
-import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
-import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
-import { sendEmail } from './integrations/email-sender.js';
 
-/**
- * Write an IPC response file for request/response style IPC calls.
- * Creates the responses directory if needed.
- */
-function writeIpcResponse(
-  sourceGroup: string,
-  requestId: string,
-  data: { result?: unknown; error?: string },
-): string {
-  const responseDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'responses');
-  fs.mkdirSync(responseDir, { recursive: true });
-  const responseFile = path.join(responseDir, `${requestId}.json`);
-  fs.writeFileSync(responseFile, JSON.stringify(data));
-  return responseFile;
-}
+// Re-export IpcDeps so existing consumers (index.ts, tests) keep working
+export { IpcDeps } from './ipc-shared.js';
+import { IpcDeps } from './ipc-shared.js';
 
-export interface IpcDeps {
-  sendMessage: (jid: string, text: string) => Promise<void>;
-  sendPhoto: (jid: string, filePath: string, caption?: string) => Promise<void>;
-  sendVideo: (jid: string, filePath: string, caption?: string) => Promise<void>;
-  sendDocument: (
-    jid: string,
-    filePath: string,
-    caption?: string,
-  ) => Promise<void>;
-  sendAudio: (jid: string, filePath: string, caption?: string) => Promise<void>;
-  sendVoice: (jid: string, filePath: string, caption?: string) => Promise<void>;
-  registeredGroups: () => Record<string, RegisteredGroup>;
-  registerGroup: (jid: string, group: RegisteredGroup) => void;
-  syncGroups: (force: boolean) => Promise<void>;
-  getAvailableGroups: () => AvailableGroup[];
-  writeGroupsSnapshot: (
-    groupFolder: string,
-    isMain: boolean,
-    availableGroups: AvailableGroup[],
-    registeredJids: Set<string>,
-  ) => void;
-  onTasksChanged: () => void;
-}
+// Handler imports
+import {
+  handleScheduleTask,
+  handlePauseTask,
+  handleResumeTask,
+  handleCancelTask,
+  handleUpdateTask,
+} from './ipc-handlers/tasks.js';
+import {
+  handleRefreshGroups,
+  handleRegisterGroup,
+} from './ipc-handlers/groups.js';
+import {
+  handleSendEmail,
+  handleListEmails,
+  handleReadEmail,
+  handleForwardEmail,
+  handleEmailAction,
+  handleListMailboxes,
+  handleSearchEmails,
+  handleMoveEmail,
+  handleReplyEmail,
+  handleFlagEmail,
+  handleCopyEmail,
+  handleCreateFolder,
+} from './ipc-handlers/email.js';
+import {
+  handleListIdeas,
+  handleSaveIdea,
+} from './ipc-handlers/ideas.js';
 
 /**
  * Translate a container filesystem path to the corresponding host path.
@@ -460,763 +449,74 @@ export async function processTaskIpc(
     content?: string;
     scope?: string;
   },
-  sourceGroup: string, // Verified identity from IPC directory
-  isMain: boolean, // Verified from directory path
+  sourceGroup: string,
+  isMain: boolean,
   deps: IpcDeps,
 ): Promise<void> {
-  const registeredGroups = deps.registeredGroups();
-
   switch (data.type) {
     case 'schedule_task':
-      if (
-        data.prompt &&
-        data.schedule_type &&
-        data.schedule_value &&
-        data.targetJid
-      ) {
-        // Resolve the target group from JID
-        const targetJid = data.targetJid as string;
-        const targetGroupEntry = registeredGroups[targetJid];
-
-        if (!targetGroupEntry) {
-          logger.warn(
-            { targetJid },
-            'Cannot schedule task: target group not registered',
-          );
-          break;
-        }
-
-        const targetFolder = targetGroupEntry.folder;
-
-        // Authorization: non-main groups can only schedule for themselves
-        if (!isMain && targetFolder !== sourceGroup) {
-          logger.warn(
-            { sourceGroup, targetFolder },
-            'Unauthorized schedule_task attempt blocked',
-          );
-          break;
-        }
-
-        const scheduleType = data.schedule_type as 'cron' | 'interval' | 'once';
-
-        let nextRun: string | null = null;
-        if (scheduleType === 'cron') {
-          try {
-            const interval = CronExpressionParser.parse(data.schedule_value, {
-              tz: TIMEZONE,
-            });
-            nextRun = interval.next().toISOString();
-          } catch {
-            logger.warn(
-              { scheduleValue: data.schedule_value },
-              'Invalid cron expression',
-            );
-            break;
-          }
-        } else if (scheduleType === 'interval') {
-          const ms = parseInt(data.schedule_value, 10);
-          if (isNaN(ms) || ms <= 0) {
-            logger.warn(
-              { scheduleValue: data.schedule_value },
-              'Invalid interval',
-            );
-            break;
-          }
-          nextRun = new Date(Date.now() + ms).toISOString();
-        } else if (scheduleType === 'once') {
-          const date = new Date(data.schedule_value);
-          if (isNaN(date.getTime())) {
-            logger.warn(
-              { scheduleValue: data.schedule_value },
-              'Invalid timestamp',
-            );
-            break;
-          }
-          nextRun = date.toISOString();
-        }
-
-        const taskId =
-          data.taskId ||
-          `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const contextMode =
-          data.context_mode === 'group' || data.context_mode === 'isolated'
-            ? data.context_mode
-            : 'isolated';
-        createTask({
-          id: taskId,
-          group_folder: targetFolder,
-          chat_jid: targetJid,
-          prompt: data.prompt,
-          schedule_type: scheduleType,
-          schedule_value: data.schedule_value,
-          context_mode: contextMode,
-          next_run: nextRun,
-          status: 'active',
-          created_at: new Date().toISOString(),
-        });
-        logger.info(
-          { taskId, sourceGroup, targetFolder, contextMode },
-          'Task created via IPC',
-        );
-        deps.onTasksChanged();
-      }
+      await handleScheduleTask(data, sourceGroup, isMain, deps);
       break;
-
     case 'pause_task':
-      if (data.taskId) {
-        const task = getTaskById(data.taskId);
-        if (task && (isMain || task.group_folder === sourceGroup)) {
-          updateTask(data.taskId, { status: 'paused' });
-          logger.info(
-            { taskId: data.taskId, sourceGroup },
-            'Task paused via IPC',
-          );
-          deps.onTasksChanged();
-        } else {
-          logger.warn(
-            { taskId: data.taskId, sourceGroup },
-            'Unauthorized task pause attempt',
-          );
-        }
-      }
+      await handlePauseTask(data, sourceGroup, isMain, deps);
       break;
-
     case 'resume_task':
-      if (data.taskId) {
-        const task = getTaskById(data.taskId);
-        if (task && (isMain || task.group_folder === sourceGroup)) {
-          updateTask(data.taskId, { status: 'active' });
-          logger.info(
-            { taskId: data.taskId, sourceGroup },
-            'Task resumed via IPC',
-          );
-          deps.onTasksChanged();
-        } else {
-          logger.warn(
-            { taskId: data.taskId, sourceGroup },
-            'Unauthorized task resume attempt',
-          );
-        }
-      }
+      await handleResumeTask(data, sourceGroup, isMain, deps);
       break;
-
     case 'cancel_task':
-      if (data.taskId) {
-        const task = getTaskById(data.taskId);
-        if (task && (isMain || task.group_folder === sourceGroup)) {
-          deleteTask(data.taskId);
-          logger.info(
-            { taskId: data.taskId, sourceGroup },
-            'Task cancelled via IPC',
-          );
-          deps.onTasksChanged();
-        } else {
-          logger.warn(
-            { taskId: data.taskId, sourceGroup },
-            'Unauthorized task cancel attempt',
-          );
-        }
-      }
+      await handleCancelTask(data, sourceGroup, isMain, deps);
       break;
-
     case 'update_task':
-      if (data.taskId) {
-        const task = getTaskById(data.taskId);
-        if (!task) {
-          logger.warn(
-            { taskId: data.taskId, sourceGroup },
-            'Task not found for update',
-          );
-          break;
-        }
-        if (!isMain && task.group_folder !== sourceGroup) {
-          logger.warn(
-            { taskId: data.taskId, sourceGroup },
-            'Unauthorized task update attempt',
-          );
-          break;
-        }
-
-        const updates: Parameters<typeof updateTask>[1] = {};
-        if (data.prompt !== undefined) updates.prompt = data.prompt;
-        if (data.schedule_type !== undefined)
-          updates.schedule_type = data.schedule_type as
-            | 'cron'
-            | 'interval'
-            | 'once';
-        if (data.schedule_value !== undefined)
-          updates.schedule_value = data.schedule_value;
-
-        // Recompute next_run if schedule changed
-        if (data.schedule_type || data.schedule_value) {
-          const updatedTask = {
-            ...task,
-            ...updates,
-          };
-          if (updatedTask.schedule_type === 'cron') {
-            try {
-              const interval = CronExpressionParser.parse(
-                updatedTask.schedule_value,
-                { tz: TIMEZONE },
-              );
-              updates.next_run = interval.next().toISOString();
-            } catch {
-              logger.warn(
-                { taskId: data.taskId, value: updatedTask.schedule_value },
-                'Invalid cron in task update',
-              );
-              break;
-            }
-          } else if (updatedTask.schedule_type === 'interval') {
-            const ms = parseInt(updatedTask.schedule_value, 10);
-            if (!isNaN(ms) && ms > 0) {
-              updates.next_run = new Date(Date.now() + ms).toISOString();
-            }
-          }
-        }
-
-        updateTask(data.taskId, updates);
-        logger.info(
-          { taskId: data.taskId, sourceGroup, updates },
-          'Task updated via IPC',
-        );
-        deps.onTasksChanged();
-      }
+      await handleUpdateTask(data, sourceGroup, isMain, deps);
       break;
-
     case 'refresh_groups':
-      // Only main group can request a refresh
-      if (isMain) {
-        logger.info(
-          { sourceGroup },
-          'Group metadata refresh requested via IPC',
-        );
-        await deps.syncGroups(true);
-        // Write updated snapshot immediately
-        const availableGroups = deps.getAvailableGroups();
-        deps.writeGroupsSnapshot(
-          sourceGroup,
-          true,
-          availableGroups,
-          new Set(Object.keys(registeredGroups)),
-        );
-      } else {
-        logger.warn(
-          { sourceGroup },
-          'Unauthorized refresh_groups attempt blocked',
-        );
-      }
+      await handleRefreshGroups(sourceGroup, isMain, deps);
       break;
-
     case 'register_group':
-      // Only main group can register new groups
-      if (!isMain) {
-        logger.warn(
-          { sourceGroup },
-          'Unauthorized register_group attempt blocked',
-        );
-        break;
-      }
-      if (data.jid && data.name && data.folder && data.trigger) {
-        if (!isValidGroupFolder(data.folder)) {
-          logger.warn(
-            { sourceGroup, folder: data.folder },
-            'Invalid register_group request - unsafe folder name',
-          );
-          break;
-        }
-        // Defense in depth: agent cannot set isMain via IPC
-        deps.registerGroup(data.jid, {
-          name: data.name,
-          folder: data.folder,
-          trigger: data.trigger,
-          added_at: new Date().toISOString(),
-          containerConfig: data.containerConfig,
-          requiresTrigger: data.requiresTrigger,
-        });
-      } else {
-        logger.warn(
-          { data },
-          'Invalid register_group request - missing required fields',
-        );
-      }
+      await handleRegisterGroup(data, sourceGroup, isMain, deps);
       break;
-
     case 'send_email':
-      // Send email via SMTP
-      if (data.to && data.subject && data.body) {
-        const to = Array.isArray(data.to) ? data.to : [data.to];
-        const success = await sendEmail({
-          to,
-          subject: data.subject as string,
-          body: data.body as string,
-          from: data.from as string | undefined,
-          html: data.html as string | undefined,
-          replyTo: data.replyTo as string | undefined,
-          account: data.account as string | undefined,
-        });
-        if (success) {
-          logger.info(
-            { sourceGroup, to, subject: data.subject },
-            'Email sent via IPC',
-          );
-        }
-      } else {
-        logger.warn(
-          { data },
-          'Invalid send_email request - missing to, subject, or body',
-        );
-      }
+      await handleSendEmail(data, sourceGroup);
       break;
-
     case 'list_emails':
-      // List emails from IMAP inbox
-      if (data.account && data.requestId) {
-        try {
-          const { listEmails } = await import('./channels/email.js');
-          const result = await listEmails({
-            account: data.account as string,
-            folder: (data.folder as string) || 'INBOX',
-            limit: (data.limit as number) || 10,
-            unreadOnly: (data.unreadOnly as boolean) || false,
-          });
-          writeIpcResponse(sourceGroup, data.requestId, { result });
-          logger.info(
-            {
-              sourceGroup,
-              account: data.account,
-              count: result.split('\n').length,
-            },
-            'Email list fetched via IPC',
-          );
-        } catch (err) {
-          writeIpcResponse(sourceGroup, data.requestId, {
-            error: String(err),
-          });
-          logger.error(
-            { sourceGroup, account: data.account, err },
-            'Error listing emails',
-          );
-        }
-      }
+      await handleListEmails(data, sourceGroup);
       break;
-
     case 'read_email':
-      // Read full email content by UID
-      if (data.account && data.uid && data.requestId) {
-        try {
-          const { readEmail } = await import('./channels/email.js');
-          const result = await readEmail({
-            account: data.account as string,
-            uid: data.uid as number,
-            folder: (data.folder as string) || undefined,
-          });
-          writeIpcResponse(sourceGroup, data.requestId, { result });
-          logger.info(
-            { sourceGroup, account: data.account, uid: data.uid },
-            'Email read via IPC',
-          );
-        } catch (err) {
-          writeIpcResponse(sourceGroup, data.requestId, {
-            error: String(err),
-          });
-          logger.error(
-            { sourceGroup, account: data.account, uid: data.uid, err },
-            'Error reading email',
-          );
-        }
-      }
+      await handleReadEmail(data, sourceGroup);
       break;
-
     case 'forward_email':
-      // Forward an email by UID
-      if (data.account && data.uid && data.to && data.requestId) {
-        try {
-          const { forwardEmail } = await import('./channels/email.js');
-          const success = await forwardEmail({
-            account: data.account as string,
-            uid: data.uid as number,
-            to: data.to as string | string[],
-            folder: (data.folder as string) || undefined,
-            comment: (data.comment as string) || undefined,
-          });
-          writeIpcResponse(sourceGroup, data.requestId, {
-            result: success ? 'Email forwarded successfully' : 'Forward failed',
-          });
-          logger.info(
-            {
-              sourceGroup,
-              account: data.account,
-              uid: data.uid,
-              to: data.to,
-              success,
-            },
-            'Email forward via IPC',
-          );
-        } catch (err) {
-          writeIpcResponse(sourceGroup, data.requestId, {
-            error: String(err),
-          });
-          logger.error(
-            { sourceGroup, account: data.account, uid: data.uid, err },
-            'Error forwarding email',
-          );
-        }
-      }
+      await handleForwardEmail(data, sourceGroup);
       break;
-
     case 'email_action':
-      // Perform IMAP action (delete/archive/mark) on an email
-      if (data.action && data.messageId && data.account) {
-        try {
-          const { performEmailAction } = await import('./channels/email.js');
-          const success = await performEmailAction({
-            action: data.action as
-              | 'delete'
-              | 'archive'
-              | 'mark_read'
-              | 'mark_unread',
-            messageId: data.messageId as string,
-            account: data.account as string,
-            archiveFolder: (data.archiveFolder as string) || 'Archive',
-          });
-          if (success) {
-            logger.info(
-              {
-                sourceGroup,
-                action: data.action,
-                messageId: data.messageId,
-                account: data.account,
-              },
-              'Email action performed via IPC',
-            );
-          } else {
-            logger.warn(
-              {
-                sourceGroup,
-                action: data.action,
-                messageId: data.messageId,
-                account: data.account,
-              },
-              'Email action failed',
-            );
-          }
-        } catch (err) {
-          logger.error(
-            {
-              sourceGroup,
-              action: data.action,
-              messageId: data.messageId,
-              err,
-            },
-            'Error performing email action',
-          );
-        }
-      } else {
-        logger.warn(
-          { data },
-          'Invalid email_action request - missing action, messageId, or account',
-        );
-      }
+      await handleEmailAction(data, sourceGroup);
       break;
-
     case 'list_mailboxes':
-      // List all IMAP folders for an account
-      if (data.account && data.requestId) {
-        try {
-          const { listMailboxes } = await import('./channels/email.js');
-          const mailboxes = await listMailboxes({
-            account: data.account as string,
-          });
-          const lines = ['📁 Available folders:', ''];
-          for (const mb of mailboxes) {
-            const specialUse = mb.specialUse ? ` (${mb.specialUse})` : '';
-            lines.push(`• ${mb.path}${specialUse}`);
-          }
-          writeIpcResponse(sourceGroup, data.requestId, {
-            result: lines.join('\n'),
-          });
-          logger.info(
-            { sourceGroup, account: data.account, count: mailboxes.length },
-            'Mailboxes listed via IPC',
-          );
-        } catch (err) {
-          writeIpcResponse(sourceGroup, data.requestId, {
-            error: String(err),
-          });
-          logger.error(
-            { sourceGroup, account: data.account, err },
-            'Error listing mailboxes',
-          );
-        }
-      }
+      await handleListMailboxes(data, sourceGroup);
       break;
-
     case 'search_emails':
-      // Search emails across folders
-      if (data.account && data.requestId) {
-        try {
-          const { searchEmails } = await import('./channels/email.js');
-          const results = await searchEmails({
-            account: data.account as string,
-            query: (data.query as string) || '',
-            folders: data.folders as string[] | undefined,
-            limit: (data.limit as number) || 20,
-            includeDeleted: (data.includeDeleted as boolean) || false,
-          });
-
-          if (results.length === 0) {
-            writeIpcResponse(sourceGroup, data.requestId, {
-              result: 'No emails found matching your search.',
-            });
-          } else {
-            const lines = [
-              `🔍 Found ${results.length} email(s) for "${data.query}":`,
-              '',
-            ];
-            for (const email of results) {
-              const marker = email.isUnread ? '🔵' : '⚪';
-              lines.push(`${marker} **${email.subject}**`);
-              lines.push(`   From: ${email.from}`);
-              lines.push(
-                `   Date: ${email.date ? new Date(email.date).toLocaleString('de-DE') : 'n/a'}`,
-              );
-              lines.push(`   Folder: ${email.folder}`);
-              lines.push(`   IMAP-UID: ${email.uid}`);
-              if (email.preview) {
-                lines.push(`   Preview: ${email.preview.slice(0, 150)}...`);
-              }
-              lines.push('');
-            }
-            writeIpcResponse(sourceGroup, data.requestId, {
-              result: lines.join('\n'),
-            });
-          }
-          logger.info(
-            {
-              sourceGroup,
-              account: data.account,
-              query: data.query,
-              count: results.length,
-            },
-            'Email search completed via IPC',
-          );
-        } catch (err) {
-          writeIpcResponse(sourceGroup, data.requestId, {
-            error: String(err),
-          });
-          logger.error(
-            { sourceGroup, account: data.account, query: data.query, err },
-            'Error searching emails',
-          );
-        }
-      }
+      await handleSearchEmails(data, sourceGroup);
       break;
-
     case 'move_email':
-      // Move email between folders
-      if (data.account && data.uid && data.fromFolder && data.toFolder && data.requestId) {
-        try {
-          const { moveEmail } = await import('./channels/email.js');
-          await moveEmail({
-            account: data.account as string,
-            uid: data.uid as number,
-            fromFolder: data.fromFolder as string,
-            toFolder: data.toFolder as string,
-          });
-          writeIpcResponse(sourceGroup, data.requestId, {
-            result: `Email moved from ${data.fromFolder} to ${data.toFolder}`,
-          });
-          logger.info(
-            {
-              sourceGroup,
-              account: data.account,
-              uid: data.uid,
-              fromFolder: data.fromFolder,
-              toFolder: data.toFolder,
-            },
-            'Email moved via IPC',
-          );
-        } catch (err) {
-          writeIpcResponse(sourceGroup, data.requestId, {
-            error: String(err),
-          });
-          logger.error(
-            {
-              sourceGroup,
-              account: data.account,
-              uid: data.uid,
-              err,
-            },
-            'Error moving email',
-          );
-        }
-      }
+      await handleMoveEmail(data, sourceGroup);
       break;
-
     case 'reply_email':
-      // Reply to an email with correct threading
-      if (data.account && data.uid && data.body && data.requestId) {
-        try {
-          const { replyEmail } = await import('./channels/email.js');
-          await replyEmail({
-            account: data.account as string,
-            uid: data.uid as number,
-            body: data.body as string,
-            folder: (data.folder as string) || undefined,
-            html: (data.html as string) || undefined,
-          });
-          writeIpcResponse(sourceGroup, data.requestId, {
-            result: 'Reply sent successfully',
-          });
-          logger.info(
-            { sourceGroup, account: data.account, uid: data.uid },
-            'Email reply sent via IPC',
-          );
-        } catch (err) {
-          writeIpcResponse(sourceGroup, data.requestId, {
-            error: String(err),
-          });
-          logger.error(
-            { sourceGroup, account: data.account, uid: data.uid, err },
-            'Error sending email reply',
-          );
-        }
-      }
+      await handleReplyEmail(data, sourceGroup);
       break;
-
     case 'flag_email':
-      // Flag or unflag an email
-      if (data.account && data.uid && data.flag && data.requestId) {
-        try {
-          const { flagEmail } = await import('./channels/email.js');
-          await flagEmail({
-            account: data.account as string,
-            uid: data.uid as number,
-            folder: (data.folder as string) || undefined,
-            flag: data.flag as 'flagged' | 'unflagged',
-          });
-          const action = data.flag === 'flagged' ? 'flagged' : 'unflagged';
-          writeIpcResponse(sourceGroup, data.requestId, {
-            result: `Email ${action}`,
-          });
-          logger.info(
-            { sourceGroup, account: data.account, uid: data.uid, flag: data.flag },
-            'Email flag updated via IPC',
-          );
-        } catch (err) {
-          writeIpcResponse(sourceGroup, data.requestId, {
-            error: String(err),
-          });
-          logger.error(
-            { sourceGroup, account: data.account, uid: data.uid, err },
-            'Error flagging email',
-          );
-        }
-      }
+      await handleFlagEmail(data, sourceGroup);
       break;
-
     case 'copy_email':
-      // Copy email to another folder
-      if (data.account && data.uid && data.fromFolder && data.toFolder && data.requestId) {
-        try {
-          const { copyEmail } = await import('./channels/email.js');
-          await copyEmail({
-            account: data.account as string,
-            uid: data.uid as number,
-            fromFolder: data.fromFolder as string,
-            toFolder: data.toFolder as string,
-          });
-          writeIpcResponse(sourceGroup, data.requestId, {
-            result: `Email copied from ${data.fromFolder} to ${data.toFolder}`,
-          });
-          logger.info(
-            {
-              sourceGroup,
-              account: data.account,
-              uid: data.uid,
-              fromFolder: data.fromFolder,
-              toFolder: data.toFolder,
-            },
-            'Email copied via IPC',
-          );
-        } catch (err) {
-          writeIpcResponse(sourceGroup, data.requestId, {
-            error: String(err),
-          });
-          logger.error(
-            { sourceGroup, account: data.account, uid: data.uid, err },
-            'Error copying email',
-          );
-        }
-      }
+      await handleCopyEmail(data, sourceGroup);
       break;
-
     case 'create_folder':
-      // Create a new IMAP folder
-      if (data.account && data.folderPath && data.requestId) {
-        try {
-          const { createFolder } = await import('./channels/email.js');
-          await createFolder({
-            account: data.account as string,
-            folderPath: data.folderPath as string,
-          });
-          writeIpcResponse(sourceGroup, data.requestId, {
-            result: `Folder "${data.folderPath}" created`,
-          });
-          logger.info(
-            { sourceGroup, account: data.account, folderPath: data.folderPath },
-            'Folder created via IPC',
-          );
-        } catch (err) {
-          writeIpcResponse(sourceGroup, data.requestId, {
-            error: String(err),
-          });
-          logger.error(
-            { sourceGroup, account: data.account, folderPath: data.folderPath, err },
-            'Error creating folder',
-          );
-        }
-      }
+      await handleCreateFolder(data, sourceGroup);
       break;
-
     case 'list_ideas':
-      if (data.requestId) {
-        try {
-          const { readIdeas } = await import('./memory.js');
-          const result = await readIdeas(
-            sourceGroup,
-            (data.scope as 'group' | 'agent' | 'global' | 'all') || 'all',
-          );
-          writeIpcResponse(sourceGroup, data.requestId, { result });
-          logger.info({ sourceGroup }, 'Ideas listed via IPC');
-        } catch (err) {
-          writeIpcResponse(sourceGroup, data.requestId, {
-            error: String(err),
-          });
-          logger.error({ sourceGroup, err }, 'Error listing ideas via IPC');
-        }
-      }
+      await handleListIdeas(data, sourceGroup);
       break;
-
     case 'save_idea':
-      if (data.content) {
-        try {
-          const { saveIdea } = await import('./memory.js');
-          await saveIdea(
-            sourceGroup,
-            data.content as string,
-            (data.scope as 'group' | 'agent' | 'global') || 'group',
-          );
-          logger.info({ sourceGroup }, 'Idea saved via IPC');
-        } catch (err) {
-          logger.error({ sourceGroup, err }, 'Error saving idea via IPC');
-        }
-      } else {
-        logger.warn({ data }, 'Invalid save_idea request - missing content');
-      }
+      await handleSaveIdea(data, sourceGroup);
       break;
-
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
   }
