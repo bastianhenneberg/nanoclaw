@@ -2,6 +2,11 @@ import { writeIpcResponse } from '../ipc-shared.js';
 import { sendEmail } from '../integrations/email-sender.js';
 import { logger } from '../logger.js';
 
+/** Strip CR/LF from email header values to prevent header injection. */
+function sanitizeHeader(value: string): string {
+  return value.replace(/[\r\n]/g, '');
+}
+
 export async function handleSendEmail(
   data: {
     to?: string | string[];
@@ -17,12 +22,12 @@ export async function handleSendEmail(
   if (data.to && data.subject && data.body) {
     const to = Array.isArray(data.to) ? data.to : [data.to];
     const success = await sendEmail({
-      to,
-      subject: data.subject as string,
+      to: to.map(sanitizeHeader),
+      subject: sanitizeHeader(data.subject as string),
       body: data.body as string,
-      from: data.from as string | undefined,
+      from: data.from ? sanitizeHeader(data.from) : undefined,
       html: data.html as string | undefined,
-      replyTo: data.replyTo as string | undefined,
+      replyTo: data.replyTo ? sanitizeHeader(data.replyTo) : undefined,
       account: data.account as string | undefined,
     });
     if (success) {

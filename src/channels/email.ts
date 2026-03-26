@@ -735,6 +735,26 @@ async function createImapClient(
   return { client, cfg };
 }
 
+/**
+ * Run a callback with an IMAP client, guaranteeing logout on completion or error.
+ * Eliminates duplicate IMAP config/auth boilerplate and prevents connection leaks.
+ */
+async function withImapClient<T>(
+  accountAddress: string,
+  fn: (client: ImapFlow, cfg: EmailAccountConfig) => Promise<T>,
+): Promise<T> {
+  const { client, cfg } = await createImapClient(accountAddress);
+  try {
+    return await fn(client, cfg);
+  } finally {
+    try {
+      await client.logout();
+    } catch {
+      /* ignore logout errors */
+    }
+  }
+}
+
 // ── Email listing API (for IPC) ───────────────────────────────────────────────
 
 export interface ListEmailsParams {
@@ -745,48 +765,7 @@ export interface ListEmailsParams {
 }
 
 export async function listEmails(params: ListEmailsParams): Promise<string> {
-  const accounts = parseEmailAccounts();
-  const cfg = accounts.find(
-    (a) => a.address.toLowerCase() === params.account.toLowerCase(),
-  );
-
-  if (!cfg) {
-    throw new Error(`Account not found: ${params.account}`);
-  }
-
-  let client: ImapFlow | null = null;
-  try {
-    // Build IMAP config
-    const imapConfig: any = {
-      host: cfg.imapHost,
-      port: cfg.imapPort,
-      secure: cfg.imapUseSSL,
-      logger: false,
-    };
-
-    if (cfg.authType === 'oauth2') {
-      const tokenMgr = new MicrosoftTokenManager({
-        tenantId: cfg.oauth2TenantId,
-        clientId: cfg.oauth2ClientId,
-        clientSecret: cfg.oauth2ClientSecret,
-        grantType: cfg.oauth2GrantType,
-        refreshToken: cfg.oauth2RefreshToken || undefined,
-      });
-      const token = await tokenMgr.getAccessToken();
-      imapConfig.auth = {
-        user: cfg.address,
-        accessToken: token,
-      };
-    } else {
-      imapConfig.auth = {
-        user: cfg.address,
-        pass: cfg.password,
-      };
-    }
-
-    client = new ImapFlow(imapConfig);
-    await client.connect();
-
+  return withImapClient(params.account, async (client) => {
     const folder = params.folder || 'INBOX';
     const limit = params.limit || 10;
 
@@ -797,7 +776,6 @@ export async function listEmails(params: ListEmailsParams): Promise<string> {
     const uids = await client.search(searchCriteria, { uid: true });
 
     if (!uids || !Array.isArray(uids) || uids.length === 0) {
-      await client.logout();
       return `No emails found in ${folder}`;
     }
 
@@ -871,16 +849,8 @@ export async function listEmails(params: ListEmailsParams): Promise<string> {
       lines.push('');
     }
 
-    await client.logout();
     return lines.join('\n');
-  } catch (err) {
-    if (client) {
-      try {
-        await client.logout();
-      } catch {}
-    }
-    throw err;
-  }
+  });
 }
 
 // ── Email action API (for IPC) ────────────────────────────────────────────────
@@ -896,11 +866,11 @@ export async function performEmailAction(
   params: EmailActionParams,
 ): Promise<boolean> {
   const accounts = parseEmailAccounts();
-  const cfg = accounts.find(
+  const cfgCheck = accounts.find(
     (a) => a.address.toLowerCase() === params.account.toLowerCase(),
   );
 
-  if (!cfg) {
+  if (!cfgCheck) {
     logger.warn(
       { account: params.account },
       'Email action failed: account not found',
@@ -908,163 +878,132 @@ export async function performEmailAction(
     return false;
   }
 
-  let client: ImapFlow | null = null;
   try {
-    // Build IMAP config
-    const imapConfig: any = {
-      host: cfg.imapHost,
-      port: cfg.imapPort,
-      secure: cfg.imapUseSSL,
-      logger: false,
-    };
-
-    if (cfg.authType === 'oauth2') {
-      const tokenMgr = new MicrosoftTokenManager({
-        tenantId: cfg.oauth2TenantId,
-        clientId: cfg.oauth2ClientId,
-        clientSecret: cfg.oauth2ClientSecret,
-        grantType: cfg.oauth2GrantType,
-        refreshToken: cfg.oauth2RefreshToken || undefined,
-      });
-      const token = await tokenMgr.getAccessToken();
-      imapConfig.auth = {
-        user: cfg.address,
-        accessToken: token,
-      };
-    } else {
-      imapConfig.auth = {
-        user: cfg.address,
-        pass: cfg.password,
-      };
-    }
-
-    client = new ImapFlow(imapConfig);
-    await client.connect();
-
-    // Find the email by Message-ID (use uid: true so results are UIDs)
-    const lock = await client.getMailboxLock(cfg.imapMailbox);
-    try {
-      const uids = await client.search(
-        { header: { 'message-id': params.messageId } },
-        { uid: true },
-      );
-
-      if (!uids || !Array.isArray(uids) || uids.length === 0) {
-        logger.warn(
-          { messageId: params.messageId, account: params.account },
-          'Email not found',
+    return await withImapClient(params.account, async (client, cfg) => {
+      // Find the email by Message-ID (use uid: true so results are UIDs)
+      const lock = await client.getMailboxLock(cfg.imapMailbox);
+      try {
+        const uids = await client.search(
+          { header: { 'message-id': params.messageId } },
+          { uid: true },
         );
-        return false;
-      }
 
-      const uid = String(uids[0]);
-
-      switch (params.action) {
-        case 'delete':
-          // Flag as deleted + expunge (works on all IMAP servers)
-          await client.messageFlagsAdd(uid, ['\\Deleted'], { uid: true });
-          await client.messageDelete(uid, { uid: true });
-          logger.info(
+        if (!uids || !Array.isArray(uids) || uids.length === 0) {
+          logger.warn(
             { messageId: params.messageId, account: params.account },
-            'Email deleted',
+            'Email not found',
           );
-          break;
-
-        case 'archive': {
-          // Find the actual archive folder on this server
-          const mailboxes = await client.list();
-          const year = new Date().getFullYear().toString();
-
-          // Priority: explicit param > year subfolder > any folder with "archiv" in name > \Archive special use
-          let archiveFolder: string | null = null;
-
-          if (params.archiveFolder) {
-            // User specified a folder — check it exists
-            const match = mailboxes.find(
-              (mb) => mb.path === params.archiveFolder,
-            );
-            if (match) archiveFolder = match.path;
-          }
-
-          if (!archiveFolder) {
-            // Look for year-specific archive subfolder (e.g. INBOX.Archives.2026)
-            const yearMatch = mailboxes.find(
-              (mb) =>
-                mb.path.toLowerCase().includes('archiv') &&
-                mb.path.includes(year),
-            );
-            if (yearMatch) archiveFolder = yearMatch.path;
-          }
-
-          if (!archiveFolder) {
-            // Look for any folder with \Archive special use flag
-            const specialUse = mailboxes.find(
-              (mb) => mb.specialUse === '\\Archive',
-            );
-            if (specialUse) archiveFolder = specialUse.path;
-          }
-
-          if (!archiveFolder) {
-            // Look for any folder with "archiv" in the name (case insensitive)
-            const archivMatch = mailboxes.find(
-              (mb) =>
-                mb.path.toLowerCase().includes('archiv') &&
-                !mb.path.includes(year),
-            );
-            if (archivMatch) archiveFolder = archivMatch.path;
-          }
-
-          if (!archiveFolder) {
-            // Last resort: try "Archive"
-            archiveFolder = 'Archive';
-          }
-
-          try {
-            await client.messageMove(uid, archiveFolder, { uid: true });
-            logger.info(
-              {
-                messageId: params.messageId,
-                account: params.account,
-                folder: archiveFolder,
-              },
-              'Email archived',
-            );
-          } catch (moveErr) {
-            logger.warn(
-              {
-                messageId: params.messageId,
-                account: params.account,
-                folder: archiveFolder,
-                err: moveErr,
-              },
-              'Archive move failed',
-            );
-          }
-          break;
+          return false;
         }
 
-        case 'mark_read':
-          await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
-          logger.info(
-            { messageId: params.messageId, account: params.account },
-            'Email marked as read',
-          );
-          break;
+        const uid = String(uids[0]);
 
-        case 'mark_unread':
-          await client.messageFlagsRemove(uid, ['\\Seen'], { uid: true });
-          logger.info(
-            { messageId: params.messageId, account: params.account },
-            'Email marked as unread',
-          );
-          break;
+        switch (params.action) {
+          case 'delete':
+            // Flag as deleted + expunge (works on all IMAP servers)
+            await client.messageFlagsAdd(uid, ['\\Deleted'], { uid: true });
+            await client.messageDelete(uid, { uid: true });
+            logger.info(
+              { messageId: params.messageId, account: params.account },
+              'Email deleted',
+            );
+            break;
+
+          case 'archive': {
+            // Find the actual archive folder on this server
+            const mailboxes = await client.list();
+            const year = new Date().getFullYear().toString();
+
+            // Priority: explicit param > year subfolder > any folder with "archiv" in name > \Archive special use
+            let archiveFolder: string | null = null;
+
+            if (params.archiveFolder) {
+              // User specified a folder — check it exists
+              const match = mailboxes.find(
+                (mb) => mb.path === params.archiveFolder,
+              );
+              if (match) archiveFolder = match.path;
+            }
+
+            if (!archiveFolder) {
+              // Look for year-specific archive subfolder (e.g. INBOX.Archives.2026)
+              const yearMatch = mailboxes.find(
+                (mb) =>
+                  mb.path.toLowerCase().includes('archiv') &&
+                  mb.path.includes(year),
+              );
+              if (yearMatch) archiveFolder = yearMatch.path;
+            }
+
+            if (!archiveFolder) {
+              // Look for any folder with \Archive special use flag
+              const specialUse = mailboxes.find(
+                (mb) => mb.specialUse === '\\Archive',
+              );
+              if (specialUse) archiveFolder = specialUse.path;
+            }
+
+            if (!archiveFolder) {
+              // Look for any folder with "archiv" in the name (case insensitive)
+              const archivMatch = mailboxes.find(
+                (mb) =>
+                  mb.path.toLowerCase().includes('archiv') &&
+                  !mb.path.includes(year),
+              );
+              if (archivMatch) archiveFolder = archivMatch.path;
+            }
+
+            if (!archiveFolder) {
+              // Last resort: try "Archive"
+              archiveFolder = 'Archive';
+            }
+
+            try {
+              await client.messageMove(uid, archiveFolder, { uid: true });
+              logger.info(
+                {
+                  messageId: params.messageId,
+                  account: params.account,
+                  folder: archiveFolder,
+                },
+                'Email archived',
+              );
+            } catch (moveErr) {
+              logger.warn(
+                {
+                  messageId: params.messageId,
+                  account: params.account,
+                  folder: archiveFolder,
+                  err: moveErr,
+                },
+                'Archive move failed',
+              );
+            }
+            break;
+          }
+
+          case 'mark_read':
+            await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+            logger.info(
+              { messageId: params.messageId, account: params.account },
+              'Email marked as read',
+            );
+            break;
+
+          case 'mark_unread':
+            await client.messageFlagsRemove(uid, ['\\Seen'], { uid: true });
+            logger.info(
+              { messageId: params.messageId, account: params.account },
+              'Email marked as unread',
+            );
+            break;
+        }
+      } finally {
+        lock.release();
       }
-    } finally {
-      lock.release();
-    }
 
-    await client.logout();
-    return true;
+      return true;
+    });
   } catch (err) {
     logger.error(
       {
@@ -1075,11 +1014,6 @@ export async function performEmailAction(
       },
       'Email action failed',
     );
-    if (client) {
-      try {
-        await client.logout();
-      } catch {}
-    }
     return false;
   }
 }
@@ -1110,9 +1044,7 @@ export interface ReadEmailResult {
 export async function readEmail(
   params: ReadEmailParams,
 ): Promise<ReadEmailResult> {
-  const { client, cfg } = await createImapClient(params.account);
-
-  try {
+  return withImapClient(params.account, async (client, cfg) => {
     const folder = params.folder || cfg.imapMailbox;
     await client.mailboxOpen(folder);
 
@@ -1189,8 +1121,6 @@ export async function readEmail(
       }
     }
 
-    await client.logout();
-
     return {
       from: env.from?.[0]?.address || 'unknown',
       to: env.to?.map((a: any) => a.address).join(', ') || '',
@@ -1200,12 +1130,7 @@ export async function readEmail(
       body: body.slice(0, 50000),
       attachments,
     };
-  } catch (err) {
-    try {
-      await client.logout();
-    } catch {}
-    throw err;
-  }
+  });
 }
 
 // ── Forward email (for IPC) ──────────────────────────────────────────────────
@@ -1321,11 +1246,8 @@ export interface MailboxInfo {
 export async function listMailboxes(
   params: ListMailboxesParams,
 ): Promise<MailboxInfo[]> {
-  const { client } = await createImapClient(params.account);
-
-  try {
+  return withImapClient(params.account, async (client) => {
     const mailboxes = await client.list();
-    await client.logout();
 
     return mailboxes.map((mb) => ({
       path: mb.path,
@@ -1334,12 +1256,7 @@ export async function listMailboxes(
       delimiter: mb.delimiter,
       flags: mb.flags ? Array.from(mb.flags) : [],
     }));
-  } catch (err) {
-    try {
-      await client.logout();
-    } catch {}
-    throw err;
-  }
+  });
 }
 
 // ── Search emails across folders (for IPC) ────────────────────────────────────
@@ -1366,9 +1283,7 @@ export interface SearchEmailResult {
 export async function searchEmails(
   params: SearchEmailsParams,
 ): Promise<SearchEmailResult[]> {
-  const { client, cfg } = await createImapClient(params.account);
-
-  try {
+  return withImapClient(params.account, async (client) => {
     const mailboxes = await client.list();
     const limit = params.limit || 20;
     const results: SearchEmailResult[] = [];
@@ -1487,14 +1402,8 @@ export async function searchEmails(
       }
     }
 
-    await client.logout();
     return results;
-  } catch (err) {
-    try {
-      await client.logout();
-    } catch {}
-    throw err;
-  }
+  });
 }
 
 // ── Move email between folders (for IPC) ──────────────────────────────────────
@@ -1507,9 +1416,7 @@ export interface MoveEmailParams {
 }
 
 export async function moveEmail(params: MoveEmailParams): Promise<boolean> {
-  const { client } = await createImapClient(params.account);
-
-  try {
+  return withImapClient(params.account, async (client) => {
     await client.mailboxOpen(params.fromFolder);
 
     const uid = String(params.uid);
@@ -1517,7 +1424,6 @@ export async function moveEmail(params: MoveEmailParams): Promise<boolean> {
     // Verify message exists
     const msg = await client.fetchOne(uid, { envelope: true }, { uid: true });
     if (!msg || typeof msg === 'boolean') {
-      await client.logout();
       throw new Error(
         `Email UID ${params.uid} not found in ${params.fromFolder}`,
       );
@@ -1536,14 +1442,8 @@ export async function moveEmail(params: MoveEmailParams): Promise<boolean> {
       'Email moved',
     );
 
-    await client.logout();
     return true;
-  } catch (err) {
-    try {
-      await client.logout();
-    } catch {}
-    throw err;
-  }
+  });
 }
 
 // ── Reply to email (for IPC) ──────────────────────────────────────────────────
@@ -1631,9 +1531,7 @@ export interface FlagEmailParams {
 }
 
 export async function flagEmail(params: FlagEmailParams): Promise<boolean> {
-  const { client, cfg } = await createImapClient(params.account);
-
-  try {
+  return withImapClient(params.account, async (client, cfg) => {
     const folder = params.folder || cfg.imapMailbox;
     await client.mailboxOpen(folder);
 
@@ -1650,14 +1548,8 @@ export async function flagEmail(params: FlagEmailParams): Promise<boolean> {
       'Email flag updated',
     );
 
-    await client.logout();
     return true;
-  } catch (err) {
-    try {
-      await client.logout();
-    } catch {}
-    throw err;
-  }
+  });
 }
 
 // ── Copy email (for IPC) ──────────────────────────────────────────────────────
@@ -1670,9 +1562,7 @@ export interface CopyEmailParams {
 }
 
 export async function copyEmail(params: CopyEmailParams): Promise<boolean> {
-  const { client } = await createImapClient(params.account);
-
-  try {
+  return withImapClient(params.account, async (client) => {
     await client.mailboxOpen(params.fromFolder);
 
     const uid = String(params.uid);
@@ -1680,7 +1570,6 @@ export async function copyEmail(params: CopyEmailParams): Promise<boolean> {
     // Verify message exists
     const msg = await client.fetchOne(uid, { envelope: true }, { uid: true });
     if (!msg || typeof msg === 'boolean') {
-      await client.logout();
       throw new Error(
         `Email UID ${params.uid} not found in ${params.fromFolder}`,
       );
@@ -1699,14 +1588,8 @@ export async function copyEmail(params: CopyEmailParams): Promise<boolean> {
       'Email copied',
     );
 
-    await client.logout();
     return true;
-  } catch (err) {
-    try {
-      await client.logout();
-    } catch {}
-    throw err;
-  }
+  });
 }
 
 // ── Create folder (for IPC) ───────────────────────────────────────────────────
@@ -1719,9 +1602,7 @@ export interface CreateFolderParams {
 export async function createFolder(
   params: CreateFolderParams,
 ): Promise<boolean> {
-  const { client } = await createImapClient(params.account);
-
-  try {
+  return withImapClient(params.account, async (client) => {
     await client.mailboxCreate(params.folderPath);
 
     logger.info(
@@ -1729,14 +1610,8 @@ export async function createFolder(
       'Folder created',
     );
 
-    await client.logout();
     return true;
-  } catch (err) {
-    try {
-      await client.logout();
-    } catch {}
-    throw err;
-  }
+  });
 }
 
 // ── Channel registration — one instance per configured account ────────────────

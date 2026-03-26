@@ -2,6 +2,29 @@ import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR, GROUPS_DIR, IPC_POLL_INTERVAL } from './config.js';
+
+/** Maximum IPC file size (1 MB). Files larger than this are rejected. */
+const MAX_IPC_FILE_SIZE = 1024 * 1024;
+/** Maximum IPC files to process per group per poll cycle. */
+const MAX_IPC_FILES_PER_CYCLE = 100;
+
+/**
+ * Safely read an IPC JSON file. Rejects symlinks, oversized files,
+ * and invalid JSON. Returns null if the file should be skipped.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function safeReadIpcJson(filePath: string): any | null {
+  const stat = fs.lstatSync(filePath);
+  if (stat.isSymbolicLink()) {
+    logger.warn({ filePath }, 'Rejecting symlinked IPC file');
+    return null;
+  }
+  if (stat.size > MAX_IPC_FILE_SIZE) {
+    logger.warn({ filePath, size: stat.size }, 'Rejecting oversized IPC file');
+    return null;
+  }
+  return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+}
 import {
   sendPoolMessage,
   sendPoolPhoto,
@@ -52,17 +75,37 @@ import { handleListIdeas, handleSaveIdea } from './ipc-handlers/ideas.js';
  *   /workspace/extra/*   → additionalMounts from containerConfig
  *   /workspace/project/  → project root (cwd)
  */
+/**
+ * Check that a resolved path stays within the expected base directory.
+ * Prevents path traversal via ../ in container-supplied paths.
+ */
+function isPathContained(resolved: string, base: string): boolean {
+  const rel = path.relative(base, resolved);
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
 function resolveHostPath(
   containerPath: string,
   sourceGroup: string,
   registeredGroups: Record<string, RegisteredGroup>,
 ): string | null {
+  // Reject paths with .. to prevent traversal
+  if (containerPath.includes('..')) {
+    logger.warn(
+      { containerPath, sourceGroup },
+      'Rejecting container path with ".." (path traversal attempt)',
+    );
+    return null;
+  }
+
   if (containerPath.startsWith('/workspace/group/')) {
-    return path.join(
-      GROUPS_DIR,
-      sourceGroup,
+    const base = path.join(GROUPS_DIR, sourceGroup);
+    const resolved = path.join(
+      base,
       containerPath.slice('/workspace/group/'.length),
     );
+    if (!isPathContained(resolved, base)) return null;
+    return resolved;
   }
   if (containerPath === '/workspace/group') {
     return path.join(GROUPS_DIR, sourceGroup);
@@ -84,7 +127,11 @@ function resolveHostPath(
           const subPath = relativePath
             .slice(mountName.length)
             .replace(/^\//, '');
-          return subPath ? path.join(mount.hostPath, subPath) : mount.hostPath;
+          const resolved = subPath
+            ? path.join(mount.hostPath, subPath)
+            : mount.hostPath;
+          if (!isPathContained(resolved, mount.hostPath)) return null;
+          return resolved;
         }
       }
       break;
@@ -96,10 +143,13 @@ function resolveHostPath(
     return null;
   }
   if (containerPath.startsWith('/workspace/project/')) {
-    return path.join(
-      process.cwd(),
+    const base = process.cwd();
+    const resolved = path.join(
+      base,
       containerPath.slice('/workspace/project/'.length),
     );
+    if (!isPathContained(resolved, base)) return null;
+    return resolved;
   }
   // Not a known container path — return as-is (might be absolute host path already)
   return containerPath;
@@ -302,11 +352,16 @@ export function startIpcWatcher(deps: IpcDeps): void {
         if (fs.existsSync(messagesDir)) {
           const messageFiles = fs
             .readdirSync(messagesDir)
-            .filter((f) => f.endsWith('.json'));
+            .filter((f) => f.endsWith('.json'))
+            .slice(0, MAX_IPC_FILES_PER_CYCLE);
           for (const file of messageFiles) {
             const filePath = path.join(messagesDir, file);
             try {
-              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              const data = safeReadIpcJson(filePath);
+              if (data === null) {
+                fs.unlinkSync(filePath);
+                continue;
+              }
               if (
                 data.chatJid &&
                 (data.type === 'message' ||
@@ -314,12 +369,14 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   data.type === 'video' ||
                   data.type === 'document')
               ) {
-                // Authorization: verify this group can send to this chatJid
+                // Authorization: verify this group can send to this chatJid.
+                // Non-main groups can only send to their own registered JID.
+                // Unregistered JIDs (email, unknown) are blocked for non-main.
                 const targetGroup = registeredGroups[data.chatJid];
-                if (
+                const isAuthorized =
                   isMain ||
-                  (targetGroup && targetGroup.folder === sourceGroup)
-                ) {
+                  (targetGroup != null && targetGroup.folder === sourceGroup);
+                if (isAuthorized) {
                   await dispatchIpcMessage(
                     data,
                     sourceGroup,
@@ -360,11 +417,16 @@ export function startIpcWatcher(deps: IpcDeps): void {
         if (fs.existsSync(tasksDir)) {
           const taskFiles = fs
             .readdirSync(tasksDir)
-            .filter((f) => f.endsWith('.json'));
+            .filter((f) => f.endsWith('.json'))
+            .slice(0, MAX_IPC_FILES_PER_CYCLE);
           for (const file of taskFiles) {
             const filePath = path.join(tasksDir, file);
             try {
-              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              const data = safeReadIpcJson(filePath);
+              if (data === null) {
+                fs.unlinkSync(filePath);
+                continue;
+              }
               // Pass source group identity to processTaskIpc for authorization
               await processTaskIpc(data, sourceGroup, isMain, deps);
               fs.unlinkSync(filePath);

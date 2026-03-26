@@ -28,6 +28,21 @@ import { logger } from './logger.js';
 
 const AGENT_NAME = 'nanoclaw';
 
+/** Timeout for AI Brain API requests (30 seconds). */
+const API_TIMEOUT_MS = 30_000;
+
+/** Wrapper around fetch() with an AbortController timeout. */
+function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() =>
+    clearTimeout(timeout),
+  );
+}
+
 /**
  * Maximum characters of memory injected into each prompt.
  * Older / lower-priority content is truncated from the front.
@@ -74,20 +89,23 @@ async function writeToAiBrain(
   if (!isAiBrainEnabled()) return;
 
   try {
-    const response = await fetch(`${AI_BRAIN_API_URL}/api/v1/agent-memories`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': AI_BRAIN_API_KEY,
+    const response = await fetchWithTimeout(
+      `${AI_BRAIN_API_URL}/api/v1/agent-memories`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': AI_BRAIN_API_KEY,
+        },
+        body: JSON.stringify({
+          agent: AGENT_NAME,
+          group: groupFolder,
+          scope: 'group',
+          type,
+          content,
+        }),
       },
-      body: JSON.stringify({
-        agent: AGENT_NAME,
-        group: groupFolder,
-        scope: 'group',
-        type,
-        content,
-      }),
-    });
+    );
 
     if (!response.ok) {
       logger.warn(
@@ -120,7 +138,7 @@ async function readFromAiBrain(
       limit: '50',
     });
 
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `${AI_BRAIN_API_URL}/api/v1/agent-memories?${params}`,
       {
         headers: { 'X-API-Key': AI_BRAIN_API_KEY },
@@ -388,7 +406,7 @@ export async function readIdeas(
         params.set('group', groupFolder);
       }
 
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${AI_BRAIN_API_URL}/api/v1/agent-memories?${params}`,
         {
           headers: { 'X-API-Key': AI_BRAIN_API_KEY },
@@ -482,7 +500,7 @@ export async function saveIdea(
   // 2. Write to AI Brain (fire-and-forget)
   if (isAiBrainEnabled()) {
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${AI_BRAIN_API_URL}/api/v1/agent-memories`,
         {
           method: 'POST',

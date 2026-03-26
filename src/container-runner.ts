@@ -354,6 +354,33 @@ function buildContainerArgs(
   return args;
 }
 
+/** Secrets that must be redacted from logs and debug output. */
+const SECRET_ENV_KEYS = new Set([
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'PEPPERMINT_API_TOKEN',
+  'AI_BRAIN_TOKEN',
+  'VERWALTUNG_API_TOKEN',
+  'PAPERLESS_API_TOKEN',
+]);
+
+/**
+ * Return a copy of container args with secret env values replaced by [REDACTED].
+ */
+function redactContainerArgs(args: string[]): string[] {
+  return args.map((arg, i) => {
+    // Docker -e args: the value follows the -e flag, formatted as KEY=VALUE
+    if (i > 0 && args[i - 1] === '-e' && arg.includes('=')) {
+      const eqIdx = arg.indexOf('=');
+      const key = arg.slice(0, eqIdx);
+      if (SECRET_ENV_KEYS.has(key)) {
+        return `${key}=[REDACTED]`;
+      }
+    }
+    return arg;
+  });
+}
+
 export async function runContainerAgent(
   group: RegisteredGroup,
   input: ContainerInput,
@@ -383,7 +410,7 @@ export async function runContainerAgent(
         (m) =>
           `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
       ),
-      containerArgs: containerArgs.join(' '),
+      containerArgs: redactContainerArgs(containerArgs).join(' '),
     },
     'Container mount configuration',
   );
@@ -613,7 +640,7 @@ export async function runContainerAgent(
         }
         logLines.push(
           `=== Container Args ===`,
-          containerArgs.join(' '),
+          redactContainerArgs(containerArgs).join(' '),
           ``,
           `=== Mounts ===`,
           mounts
@@ -643,7 +670,7 @@ export async function runContainerAgent(
         );
       }
 
-      fs.writeFileSync(logFile, logLines.join('\n'));
+      fs.writeFileSync(logFile, logLines.join('\n'), { mode: 0o600 });
       logger.debug({ logFile, verbose: isVerbose }, 'Container log written');
 
       if (code !== 0) {
