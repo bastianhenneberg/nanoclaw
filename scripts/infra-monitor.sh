@@ -46,7 +46,7 @@ check_local() {
 
 # === SSH CHECKS ===
 check_ssh() {
-    local name=$1 host=$2 user=$3
+    local name=$1 host=$2 user=$3 check_nginx=${4:-true}
 
     # Single SSH connection: test + checks combined
     result=$(ssh -i "$SSH_KEY" -o ConnectTimeout=10 -o BatchMode=yes "$user@$host" '
@@ -70,7 +70,17 @@ check_ssh() {
     [ "${disk:-0}" -ge "$DISK_WARN" ] && [ "${disk:-0}" -lt "$DISK_CRIT" ] && add_alert "$name: Disk ${disk}%"
     [ "${mem:-0}" -ge "$MEMORY_WARN" ] && add_alert "$name: Memory ${mem}%"
     [ "${load:-0}" -ge "$LOAD_WARN" ] && add_alert "$name: Load $load"
-    [ "$nginx" != "active" ] && add_alert "$name: nginx DOWN"
+    # Only check nginx if requested (4th param)
+    [ "$check_nginx" = "true" ] && [ "$nginx" != "active" ] && add_alert "$name: nginx DOWN"
+}
+
+# === PING CHECK (for hosts without SSH access) ===
+check_ping() {
+    local name=$1 host=$2
+    
+    if ! ping -c 2 -W 3 "$host" > /dev/null 2>&1; then
+        add_alert "$name: UNREACHABLE"
+    fi
 }
 
 # === BACKUP CHECK (omarchy) ===
@@ -109,9 +119,9 @@ check_backup() {
 # === RUN CHECKS ===
 check_local
 check_backup
-check_ssh "bold-tokyo" "178.104.23.247" "forge"
-check_ssh "coolify-instanz" "188.245.53.38" "root"
-check_ssh "kiserver" "192.168.1.147" "bastian"
+check_ssh "bold-tokyo" "178.104.23.247" "forge" true
+check_ssh "coolify-instanz" "188.245.53.38" "root" false  # Coolify uses own proxy, no nginx
+check_ping "kiserver" "192.168.1.147"  # No SSH access from monitoring, ping only
 
 # === REPORT ===
 if [ -n "$alerts" ]; then
