@@ -272,41 +272,25 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
-  // Pass Peppermint API token if configured
-  const pmSecrets = readEnvFile(['PEPPERMINT_API_TOKEN']);
-  if (pmSecrets.PEPPERMINT_API_TOKEN) {
-    args.push('-e', `PEPPERMINT_API_TOKEN=${pmSecrets.PEPPERMINT_API_TOKEN}`);
-  }
-
-  // Pass AI Brain token if configured
-  const brainSecrets = readEnvFile(['AI_BRAIN_TOKEN']);
-  if (brainSecrets.AI_BRAIN_TOKEN) {
-    args.push('-e', `AI_BRAIN_TOKEN=${brainSecrets.AI_BRAIN_TOKEN}`);
-  }
-
-  // Pass Peppermint Verwaltung token if configured
-  const verwaltungSecrets = readEnvFile(['VERWALTUNG_API_TOKEN']);
-  if (verwaltungSecrets.VERWALTUNG_API_TOKEN) {
-    args.push(
-      '-e',
-      `VERWALTUNG_API_TOKEN=${verwaltungSecrets.VERWALTUNG_API_TOKEN}`,
-    );
-  }
-
-  // Pass Paperless-ngx credentials if configured
-  const paperlessSecrets = readEnvFile([
+  // Pass integration secrets if configured (read once from .env)
+  const secrets = readEnvFile([
+    'PEPPERMINT_API_TOKEN',
+    'AI_BRAIN_TOKEN',
+    'VERWALTUNG_API_TOKEN',
     'PAPERLESS_API_TOKEN',
     'PAPERLESS_API_URL',
   ]);
-  if (paperlessSecrets.PAPERLESS_API_TOKEN) {
-    args.push(
-      '-e',
-      `PAPERLESS_API_TOKEN=${paperlessSecrets.PAPERLESS_API_TOKEN}`,
-    );
-    args.push(
-      '-e',
-      `PAPERLESS_API_URL=${paperlessSecrets.PAPERLESS_API_URL || ''}`,
-    );
+  const secretPassthrough: [string, string | undefined][] = [
+    ['PEPPERMINT_API_TOKEN', secrets.PEPPERMINT_API_TOKEN],
+    ['AI_BRAIN_TOKEN', secrets.AI_BRAIN_TOKEN],
+    ['VERWALTUNG_API_TOKEN', secrets.VERWALTUNG_API_TOKEN],
+    ['PAPERLESS_API_TOKEN', secrets.PAPERLESS_API_TOKEN],
+  ];
+  for (const [key, value] of secretPassthrough) {
+    if (value) args.push('-e', `${key}=${value}`);
+  }
+  if (secrets.PAPERLESS_API_TOKEN) {
+    args.push('-e', `PAPERLESS_API_URL=${secrets.PAPERLESS_API_URL || ''}`);
   }
 
   // Pass host groups directory so agents can resolve container paths to host paths
@@ -314,10 +298,24 @@ function buildContainerArgs(
   args.push('-e', `NANOCLAW_HOST_GROUPS_DIR=${GROUPS_DIR}`);
 
   // Git config so agents can commit and push
-  args.push('-e', 'GIT_AUTHOR_NAME=Peppermint Digital');
-  args.push('-e', 'GIT_AUTHOR_EMAIL=department@peppermint-digital.de');
-  args.push('-e', 'GIT_COMMITTER_NAME=Peppermint Digital');
-  args.push('-e', 'GIT_COMMITTER_EMAIL=department@peppermint-digital.de');
+  const gitEnv = readEnvFile([
+    'GIT_AUTHOR_NAME',
+    'GIT_AUTHOR_EMAIL',
+    'GIT_COMMITTER_NAME',
+    'GIT_COMMITTER_EMAIL',
+  ]);
+  const gitAuthorName = gitEnv.GIT_AUTHOR_NAME || 'NanoClaw Agent';
+  const gitAuthorEmail = gitEnv.GIT_AUTHOR_EMAIL || 'agent@nanoclaw.local';
+  args.push('-e', `GIT_AUTHOR_NAME=${gitAuthorName}`);
+  args.push('-e', `GIT_AUTHOR_EMAIL=${gitAuthorEmail}`);
+  args.push(
+    '-e',
+    `GIT_COMMITTER_NAME=${gitEnv.GIT_COMMITTER_NAME || gitAuthorName}`,
+  );
+  args.push(
+    '-e',
+    `GIT_COMMITTER_EMAIL=${gitEnv.GIT_COMMITTER_EMAIL || gitAuthorEmail}`,
+  );
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
