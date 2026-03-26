@@ -138,6 +138,28 @@ function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
 }
 
+/**
+ * Fetch integration secrets from the host's credential proxy.
+ * Containers no longer receive secrets via environment variables.
+ */
+async function fetchSecrets(): Promise<Record<string, string>> {
+  const baseUrl = process.env.ANTHROPIC_BASE_URL;
+  if (!baseUrl) return {};
+  try {
+    const response = await fetch(`${baseUrl}/nanoclaw/secrets`);
+    if (!response.ok) {
+      log(`Failed to fetch secrets: ${response.status}`);
+      return {};
+    }
+    const secrets = await response.json() as Record<string, string>;
+    log(`Secrets fetched: ${Object.keys(secrets).join(', ')}`);
+    return secrets;
+  } catch (err) {
+    log(`Cannot reach credential proxy for secrets: ${err}`);
+    return {};
+  }
+}
+
 function getSessionSummary(sessionId: string, transcriptPath: string): string | null {
   const projectDir = path.dirname(transcriptPath);
   const indexPath = path.join(projectDir, 'sessions-index.json');
@@ -430,6 +452,9 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  // Fetch integration secrets from credential proxy (no secrets in env vars)
+  const secrets = await fetchSecrets();
+
   const mcpServers: Record<string, any> = {
     nanoclaw: {
       command: 'node',
@@ -438,38 +463,41 @@ async function runQuery(
         NANOCLAW_CHAT_JID: containerInput.chatJid,
         NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
         NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+        // Pass secrets to MCP server process so it can use Paperless etc.
+        ...(secrets.PAPERLESS_API_TOKEN ? { PAPERLESS_API_TOKEN: secrets.PAPERLESS_API_TOKEN } : {}),
+        ...(secrets.PAPERLESS_API_URL ? { PAPERLESS_API_URL: secrets.PAPERLESS_API_URL } : {}),
       },
     },
-    ...(process.env.PEPPERMINT_API_TOKEN ? {
+    ...(secrets.PEPPERMINT_API_TOKEN ? {
       peppermint: {
         type: 'http' as const,
         url: 'https://pm.peppermint-digital.com/mcp/peppermint',
         headers: {
-          'Authorization': `Bearer ${process.env.PEPPERMINT_API_TOKEN}`,
+          'Authorization': `Bearer ${secrets.PEPPERMINT_API_TOKEN}`,
         },
       },
     } : {}),
-    ...(process.env.AI_BRAIN_TOKEN ? {
+    ...(secrets.AI_BRAIN_TOKEN ? {
       'ai-brain': {
         type: 'http' as const,
         url: 'https://brain.proxy.peppermint-digital.com/mcp/brain',
         headers: {
-          'Authorization': `Bearer ${process.env.AI_BRAIN_TOKEN}`,
+          'Authorization': `Bearer ${secrets.AI_BRAIN_TOKEN}`,
         },
       },
     } : {}),
-    ...(process.env.VERWALTUNG_API_TOKEN ? {
+    ...(secrets.VERWALTUNG_API_TOKEN ? {
       'peppermint-verwaltung': {
         type: 'http' as const,
         url: 'https://vw.peppermint-digital.com/mcp/verwaltung',
         headers: {
-          'Authorization': `Bearer ${process.env.VERWALTUNG_API_TOKEN}`,
+          'Authorization': `Bearer ${secrets.VERWALTUNG_API_TOKEN}`,
         },
       },
     } : {}),
   };
   log(`MCP servers configured: ${Object.keys(mcpServers).join(', ')}`);
-  log(`AI_BRAIN_TOKEN set: ${!!process.env.AI_BRAIN_TOKEN}`);
+  log(`AI_BRAIN_TOKEN set: ${!!secrets.AI_BRAIN_TOKEN}`);
 
   for await (const message of query({
     prompt: stream,
