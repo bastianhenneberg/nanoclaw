@@ -175,11 +175,7 @@ export async function handleEmailAction(
   try {
     const { performEmailAction } = await import('../channels/email.js');
     const success = await performEmailAction({
-      action: data.action as
-        | 'delete'
-        | 'archive'
-        | 'mark_read'
-        | 'mark_unread',
+      action: data.action as 'delete' | 'archive' | 'mark_read' | 'mark_unread',
       messageId: data.messageId as string,
       account: data.account as string,
       archiveFolder: (data.archiveFolder as string) || 'Archive',
@@ -333,7 +329,14 @@ export async function handleMoveEmail(
   },
   sourceGroup: string,
 ): Promise<void> {
-  if (!data.account || !data.uid || !data.fromFolder || !data.toFolder || !data.requestId) return;
+  if (
+    !data.account ||
+    !data.uid ||
+    !data.fromFolder ||
+    !data.toFolder ||
+    !data.requestId
+  )
+    return;
   try {
     const { moveEmail } = await import('../channels/email.js');
     await moveEmail({
@@ -458,7 +461,14 @@ export async function handleCopyEmail(
   },
   sourceGroup: string,
 ): Promise<void> {
-  if (!data.account || !data.uid || !data.fromFolder || !data.toFolder || !data.requestId) return;
+  if (
+    !data.account ||
+    !data.uid ||
+    !data.fromFolder ||
+    !data.toFolder ||
+    !data.requestId
+  )
+    return;
   try {
     const { copyEmail } = await import('../channels/email.js');
     await copyEmail({

@@ -43,10 +43,7 @@ import {
   handleCopyEmail,
   handleCreateFolder,
 } from './ipc-handlers/email.js';
-import {
-  handleListIdeas,
-  handleSaveIdea,
-} from './ipc-handlers/ideas.js';
+import { handleListIdeas, handleSaveIdea } from './ipc-handlers/ideas.js';
 
 /**
  * Translate a container filesystem path to the corresponding host path.

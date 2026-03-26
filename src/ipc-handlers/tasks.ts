@@ -69,20 +69,14 @@ export async function handleScheduleTask(
   } else if (scheduleType === 'interval') {
     const ms = parseInt(data.schedule_value, 10);
     if (isNaN(ms) || ms <= 0) {
-      logger.warn(
-        { scheduleValue: data.schedule_value },
-        'Invalid interval',
-      );
+      logger.warn({ scheduleValue: data.schedule_value }, 'Invalid interval');
       return;
     }
     nextRun = new Date(Date.now() + ms).toISOString();
   } else if (scheduleType === 'once') {
     const date = new Date(data.schedule_value);
     if (isNaN(date.getTime())) {
-      logger.warn(
-        { scheduleValue: data.schedule_value },
-        'Invalid timestamp',
-      );
+      logger.warn({ scheduleValue: data.schedule_value }, 'Invalid timestamp');
       return;
     }
     nextRun = date.toISOString();
@@ -124,10 +118,7 @@ export async function handlePauseTask(
   const task = getTaskById(data.taskId);
   if (task && (isMain || task.group_folder === sourceGroup)) {
     updateTask(data.taskId, { status: 'paused' });
-    logger.info(
-      { taskId: data.taskId, sourceGroup },
-      'Task paused via IPC',
-    );
+    logger.info({ taskId: data.taskId, sourceGroup }, 'Task paused via IPC');
     deps.onTasksChanged();
   } else {
     logger.warn(
@@ -147,10 +138,7 @@ export async function handleResumeTask(
   const task = getTaskById(data.taskId);
   if (task && (isMain || task.group_folder === sourceGroup)) {
     updateTask(data.taskId, { status: 'active' });
-    logger.info(
-      { taskId: data.taskId, sourceGroup },
-      'Task resumed via IPC',
-    );
+    logger.info({ taskId: data.taskId, sourceGroup }, 'Task resumed via IPC');
     deps.onTasksChanged();
   } else {
     logger.warn(
@@ -170,10 +158,7 @@ export async function handleCancelTask(
   const task = getTaskById(data.taskId);
   if (task && (isMain || task.group_folder === sourceGroup)) {
     deleteTask(data.taskId);
-    logger.info(
-      { taskId: data.taskId, sourceGroup },
-      'Task cancelled via IPC',
-    );
+    logger.info({ taskId: data.taskId, sourceGroup }, 'Task cancelled via IPC');
     deps.onTasksChanged();
   } else {
     logger.warn(
@@ -214,10 +199,7 @@ export async function handleUpdateTask(
   const updates: Parameters<typeof updateTask>[1] = {};
   if (data.prompt !== undefined) updates.prompt = data.prompt;
   if (data.schedule_type !== undefined)
-    updates.schedule_type = data.schedule_type as
-      | 'cron'
-      | 'interval'
-      | 'once';
+    updates.schedule_type = data.schedule_type as 'cron' | 'interval' | 'once';
   if (data.schedule_value !== undefined)
     updates.schedule_value = data.schedule_value;
 

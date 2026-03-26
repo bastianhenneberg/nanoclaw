@@ -9,10 +9,7 @@ export async function handleRefreshGroups(
   deps: IpcDeps,
 ): Promise<void> {
   if (isMain) {
-    logger.info(
-      { sourceGroup },
-      'Group metadata refresh requested via IPC',
-    );
+    logger.info({ sourceGroup }, 'Group metadata refresh requested via IPC');
     await deps.syncGroups(true);
     const registeredGroups = deps.registeredGroups();
     const availableGroups = deps.getAvailableGroups();
@@ -23,10 +20,7 @@ export async function handleRefreshGroups(
       new Set(Object.keys(registeredGroups)),
     );
   } else {
-    logger.warn(
-      { sourceGroup },
-      'Unauthorized refresh_groups attempt blocked',
-    );
+    logger.warn({ sourceGroup }, 'Unauthorized refresh_groups attempt blocked');
   }
 }
 
@@ -44,10 +38,7 @@ export async function handleRegisterGroup(
   deps: IpcDeps,
 ): Promise<void> {
   if (!isMain) {
-    logger.warn(
-      { sourceGroup },
-      'Unauthorized register_group attempt blocked',
-    );
+    logger.warn({ sourceGroup }, 'Unauthorized register_group attempt blocked');
     return;
   }
   if (data.jid && data.name && data.folder && data.trigger) {
