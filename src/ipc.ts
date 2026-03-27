@@ -326,7 +326,10 @@ export function startIpcWatcher(deps: IpcDeps): void {
     Promise.race([
       promise,
       new Promise<T>((_, reject) =>
-        setTimeout(() => reject(new Error(`IPC dispatch timed out after ${ms}ms`)), ms),
+        setTimeout(
+          () => reject(new Error(`IPC dispatch timed out after ${ms}ms`)),
+          ms,
+        ),
       ),
     ]);
 
@@ -463,7 +466,10 @@ export function startIpcWatcher(deps: IpcDeps): void {
             }
           }
         } catch (err) {
-          logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
+          logger.error(
+            { err, sourceGroup },
+            'Error reading IPC tasks directory',
+          );
         }
       }
     } catch (err) {
