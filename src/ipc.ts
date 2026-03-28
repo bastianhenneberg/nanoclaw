@@ -67,6 +67,14 @@ import {
   handleCreateFolder,
 } from './ipc-handlers/email.js';
 import { handleListIdeas, handleSaveIdea } from './ipc-handlers/ideas.js';
+import {
+  handlePresenceTrack,
+  handlePresenceUntrack,
+  handlePresenceList,
+  handlePresenceStats,
+  handlePresenceEvents,
+  handlePresenceStatus,
+} from './ipc-handlers/presence.js';
 
 /**
  * Translate a container filesystem path to the corresponding host path.
@@ -534,6 +542,10 @@ export async function processTaskIpc(
     // For save_idea
     content?: string;
     scope?: string;
+    // For presence tracking
+    phone?: string;
+    label?: string;
+    days?: number;
   },
   sourceGroup: string,
   isMain: boolean,
@@ -602,6 +614,25 @@ export async function processTaskIpc(
       break;
     case 'save_idea':
       await handleSaveIdea(data, sourceGroup);
+      break;
+    // Presence tracking commands
+    case 'presence_track':
+      await handlePresenceTrack(data, sourceGroup);
+      break;
+    case 'presence_untrack':
+      await handlePresenceUntrack(data, sourceGroup);
+      break;
+    case 'presence_list':
+      await handlePresenceList(data, sourceGroup);
+      break;
+    case 'presence_stats':
+      await handlePresenceStats(data, sourceGroup);
+      break;
+    case 'presence_events':
+      await handlePresenceEvents(data, sourceGroup);
+      break;
+    case 'presence_status':
+      await handlePresenceStatus(data, sourceGroup);
       break;
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

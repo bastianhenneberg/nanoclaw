@@ -4,6 +4,10 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  PRESENCE_ALERT_CHAT_ID,
+  PRESENCE_AUTH_DIR,
+  PRESENCE_DB_PATH,
+  PRESENCE_TRACKER_ENABLED,
   TELEGRAM_BOT_POOL,
   WEBHOOK_BIND_HOST,
   WEBHOOK_PORT,
@@ -54,6 +58,11 @@ import {
   recoverPendingMessages,
   startMessageLoop,
 } from './message-processor.js';
+import {
+  initPresenceTracker,
+  startPresenceTracker,
+  stopPresenceTracker,
+} from './presence/index.js';
 
 // --- Shared mutable state ---
 
@@ -190,6 +199,7 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
     webhookServer?.close();
+    await stopPresenceTracker();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
@@ -396,6 +406,31 @@ async function main(): Promise<void> {
   });
   healthMonitor.start();
   logger.info('Health monitor started');
+
+  // Initialize and start presence tracker if enabled
+  if (PRESENCE_TRACKER_ENABLED) {
+    // Create alert sender using existing channel infrastructure
+    const presenceAlertSender = async (chatId: string, message: string) => {
+      const channel = findChannel(channels, chatId);
+      if (channel) {
+        await channel.sendMessage(chatId, message);
+      }
+    };
+
+    initPresenceTracker(
+      {
+        enabled: true,
+        alertChatId: PRESENCE_ALERT_CHAT_ID,
+        authDir: PRESENCE_AUTH_DIR,
+        dbPath: PRESENCE_DB_PATH,
+      },
+      presenceAlertSender,
+    );
+
+    startPresenceTracker().catch((err) => {
+      logger.error({ err }, 'Failed to start presence tracker');
+    });
+  }
 
   recoverPendingMessages(messageState, queue);
   startMessageLoop(processorDeps).catch((err) => {

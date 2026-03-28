@@ -20,6 +20,8 @@ const envConfig = readEnvFile([
   'AI_BRAIN_API_URL',
   'AI_BRAIN_API_KEY',
   'EMAIL_GROUP_JID',
+  'PRESENCE_TRACKER_ENABLED',
+  'PRESENCE_ALERT_CHAT_ID',
 ]);
 
 export const ASSISTANT_NAME =
@@ -139,3 +141,19 @@ export const TELEGRAM_BOT_POOL = (
   .split(',')
   .map((t) => t.trim())
   .filter(Boolean);
+
+// ─── Presence Tracker configuration ───────────────────────────────────────
+// Optional WhatsApp presence tracking (online/offline monitoring).
+// Requires separate WhatsApp authentication (stored in store/presence-auth/).
+
+export const PRESENCE_TRACKER_ENABLED =
+  (process.env.PRESENCE_TRACKER_ENABLED ||
+    envConfig.PRESENCE_TRACKER_ENABLED) === 'true';
+
+// Chat ID for presence alerts (e.g., "tg:-5284494721" for a Telegram group)
+export const PRESENCE_ALERT_CHAT_ID =
+  process.env.PRESENCE_ALERT_CHAT_ID || envConfig.PRESENCE_ALERT_CHAT_ID || '';
+
+// Paths for presence tracker data (stored under STORE_DIR)
+export const PRESENCE_AUTH_DIR = path.join(STORE_DIR, 'presence-auth');
+export const PRESENCE_DB_PATH = path.join(STORE_DIR, 'presence-tracker.db');
