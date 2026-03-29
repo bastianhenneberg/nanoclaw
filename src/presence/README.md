@@ -95,6 +95,35 @@ Check tracker connection status.
 }
 ```
 
+### `presence_start`
+Start the presence tracker (connect to WhatsApp). Allows manual control over when tracking is active.
+
+```json
+{
+  "type": "presence_start",
+  "requestId": "start-123"
+}
+```
+
+### `presence_stop`
+Stop the presence tracker (disconnect from WhatsApp). The tracker can be restarted later with `presence_start`.
+
+```json
+{
+  "type": "presence_stop",
+  "requestId": "stop-123"
+}
+```
+
+## Manual Control
+
+By default, the presence tracker starts automatically when NanoClaw starts (if `PRESENCE_TRACKER_ENABLED=true`). Use `presence_start` and `presence_stop` to manually control when tracking is active.
+
+**Why manual control?**
+- Avoid appearing "always online" on WhatsApp (potential ban risk)
+- Save resources when tracking isn't needed
+- Better privacy - only track when you want to
+
 ## Architecture
 
 ```

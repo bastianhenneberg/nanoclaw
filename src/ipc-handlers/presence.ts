@@ -303,7 +303,8 @@ export async function handlePresenceStart(
 
   if (!isPresenceTrackerEnabled()) {
     writeIpcResponse(sourceGroup, data.requestId, {
-      error: 'Presence tracker is not configured (PRESENCE_TRACKER_ENABLED != true)',
+      error:
+        'Presence tracker is not configured (PRESENCE_TRACKER_ENABLED != true)',
     });
     return;
   }
