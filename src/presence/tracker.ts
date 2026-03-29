@@ -134,19 +134,19 @@ export class PresenceTracker {
   private loadTrackedNumbers(): void {
     const jids = getTrackedJids();
     this.trackedJids = new Set(jids);
-    
+
     // Load LID mappings for tracked numbers
     this.loadLidMappings();
-    
+
     logger.info(
       { count: this.trackedJids.size, lidMappings: this.lidToJid.size },
       'Presence tracker loaded tracked numbers',
     );
   }
-  
+
   private loadLidMappings(): void {
     this.lidToJid.clear();
-    
+
     // Read LID mapping files from auth directory
     // Format: lid-mapping-{phoneNumber}.json contains the LID as a string
     try {
@@ -156,11 +156,14 @@ export class PresenceTracker {
         if (match) {
           const phone = match[1];
           const jid = `${phone}@s.whatsapp.net`;
-          
+
           // Only load mappings for tracked numbers
           if (this.trackedJids.has(jid)) {
             try {
-              const lidStr = fs.readFileSync(path.join(this.authDir, file), 'utf-8');
+              const lidStr = fs.readFileSync(
+                path.join(this.authDir, file),
+                'utf-8',
+              );
               const lid = JSON.parse(lidStr);
               const lidJid = `${lid}@lid`;
               this.lidToJid.set(lidJid, jid);
@@ -204,7 +207,7 @@ export class PresenceTracker {
       if (phoneJid) {
         jid = phoneJid;
       }
-      
+
       if (!this.trackedJids.has(jid)) continue;
 
       const status = presence.lastKnownPresence;
