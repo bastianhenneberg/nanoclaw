@@ -8,6 +8,7 @@
 - Pool bot audio/voice sending support (sendPoolAudio, sendPoolVoice)
 
 ### Fixed
+- **WhatsApp Presence Tracker LID support**: WhatsApp changed presence updates to use LID format (`@lid`) instead of phone numbers. Tracker now reads `lid-mapping-*.json` files and converts LIDs to phone JIDs for proper tracking.
 - **Webhook version drift**: `/api/status` now reads version from package.json instead of hardcoded string
 - **Race condition in llm-provider**: `process.env` manipulation replaced with one-time init to prevent concurrent call conflicts
 
