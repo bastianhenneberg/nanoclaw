@@ -69,14 +69,17 @@ export async function startPresenceTracker(): Promise<void> {
 
 /**
  * Stop the presence tracker (disconnect from WhatsApp).
+ * @param full - If true, fully cleanup (on shutdown). If false, just disconnect (can restart).
  */
-export async function stopPresenceTracker(): Promise<void> {
+export async function stopPresenceTracker(full: boolean = true): Promise<void> {
   if (tracker) {
     await tracker.stop();
-    tracker = null;
+    if (full) {
+      tracker = null;
+      closePresenceDb();
+      config = null;
+    }
   }
-  closePresenceDb();
-  config = null;
 }
 
 /**
@@ -91,4 +94,11 @@ export function getPresenceTracker(): PresenceTracker | null {
  */
 export function isPresenceTrackerEnabled(): boolean {
   return tracker !== null;
+}
+
+/**
+ * Check if presence tracker is currently connected.
+ */
+export function isPresenceTrackerConnected(): boolean {
+  return tracker?.isConnected() ?? false;
 }

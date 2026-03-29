@@ -74,6 +74,8 @@ import {
   handlePresenceStats,
   handlePresenceEvents,
   handlePresenceStatus,
+  handlePresenceStart,
+  handlePresenceStop,
 } from './ipc-handlers/presence.js';
 
 /**
@@ -633,6 +635,12 @@ export async function processTaskIpc(
       break;
     case 'presence_status':
       await handlePresenceStatus(data, sourceGroup);
+      break;
+    case 'presence_start':
+      await handlePresenceStart(data, sourceGroup);
+      break;
+    case 'presence_stop':
+      await handlePresenceStop(data, sourceGroup);
       break;
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

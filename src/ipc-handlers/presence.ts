@@ -13,6 +13,9 @@
 import {
   getPresenceTracker,
   isPresenceTrackerEnabled,
+  isPresenceTrackerConnected,
+  startPresenceTracker,
+  stopPresenceTracker,
 } from '../presence/index.js';
 import { writeIpcResponse } from '../ipc-shared.js';
 import { logger } from '../logger.js';
@@ -288,4 +291,74 @@ export async function handlePresenceStatus(
   writeIpcResponse(sourceGroup, data.requestId, {
     result: lines.join('\n'),
   });
+}
+
+export async function handlePresenceStart(
+  data: {
+    requestId?: string;
+  },
+  sourceGroup: string,
+): Promise<void> {
+  if (!data.requestId) return;
+
+  if (!isPresenceTrackerEnabled()) {
+    writeIpcResponse(sourceGroup, data.requestId, {
+      error: 'Presence tracker is not configured (PRESENCE_TRACKER_ENABLED != true)',
+    });
+    return;
+  }
+
+  if (isPresenceTrackerConnected()) {
+    writeIpcResponse(sourceGroup, data.requestId, {
+      result: '📡 Presence tracker is already running',
+    });
+    return;
+  }
+
+  try {
+    await startPresenceTracker();
+    writeIpcResponse(sourceGroup, data.requestId, {
+      result: '🟢 Presence tracker started',
+    });
+    logger.info({ sourceGroup }, 'Presence tracker started via IPC');
+  } catch (err) {
+    writeIpcResponse(sourceGroup, data.requestId, {
+      error: `Failed to start presence tracker: ${err}`,
+    });
+  }
+}
+
+export async function handlePresenceStop(
+  data: {
+    requestId?: string;
+  },
+  sourceGroup: string,
+): Promise<void> {
+  if (!data.requestId) return;
+
+  if (!isPresenceTrackerEnabled()) {
+    writeIpcResponse(sourceGroup, data.requestId, {
+      result: '📡 Presence tracker is not running',
+    });
+    return;
+  }
+
+  if (!isPresenceTrackerConnected()) {
+    writeIpcResponse(sourceGroup, data.requestId, {
+      result: '📡 Presence tracker is already stopped',
+    });
+    return;
+  }
+
+  try {
+    await stopPresenceTracker(false); // Don't fully cleanup, allow restart
+    writeIpcResponse(sourceGroup, data.requestId, {
+      result: '🔴 Presence tracker stopped',
+    });
+    logger.info({ sourceGroup }, 'Presence tracker stopped via IPC');
+  } catch (err) {
+    writeIpcResponse(sourceGroup, data.requestId, {
+      error: `Failed to stop presence tracker: ${err}`,
+    });
+  }
 }
