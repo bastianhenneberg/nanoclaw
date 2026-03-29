@@ -70,6 +70,7 @@ export class PresenceTracker {
       logger: silentLogger,
       generateHighQualityLinkPreview: false,
       syncFullHistory: false,
+      markOnlineOnConnect: false, // Don't show as online 24/7
     });
 
     this.sock.ev.on('creds.update', saveCreds);
