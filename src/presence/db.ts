@@ -59,16 +59,13 @@ export function getTrackedNumbers(): TrackedNumber[] {
 }
 
 export function getTrackedJids(): string[] {
-  const rows = requireDb()
-    .prepare('SELECT jid FROM tracked_numbers')
-    .all() as { jid: string }[];
+  const rows = requireDb().prepare('SELECT jid FROM tracked_numbers').all() as {
+    jid: string;
+  }[];
   return rows.map((r) => r.jid);
 }
 
-export function addTrackedNumber(
-  jid: string,
-  label: string | null,
-): void {
+export function addTrackedNumber(jid: string, label: string | null): void {
   requireDb()
     .prepare(
       'INSERT OR REPLACE INTO tracked_numbers (jid, label, added_at) VALUES (?, ?, ?)',

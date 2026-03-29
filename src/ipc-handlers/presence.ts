@@ -10,7 +10,10 @@
  *   presence_status  - Check tracker connection status
  */
 
-import { getPresenceTracker, isPresenceTrackerEnabled } from '../presence/index.js';
+import {
+  getPresenceTracker,
+  isPresenceTrackerEnabled,
+} from '../presence/index.js';
 import { writeIpcResponse } from '../ipc-shared.js';
 import { logger } from '../logger.js';
 
@@ -26,7 +29,8 @@ export async function handlePresenceTrack(
 
   if (!isPresenceTrackerEnabled()) {
     writeIpcResponse(sourceGroup, data.requestId, {
-      error: 'Presence tracker is not enabled. Set PRESENCE_TRACKER_ENABLED=true in .env',
+      error:
+        'Presence tracker is not enabled. Set PRESENCE_TRACKER_ENABLED=true in .env',
     });
     return;
   }
@@ -111,7 +115,8 @@ export async function handlePresenceList(
 
   if (tracked.length === 0) {
     writeIpcResponse(sourceGroup, data.requestId, {
-      result: '📋 No numbers tracked yet.\n\nUse presence_track to add numbers.',
+      result:
+        '📋 No numbers tracked yet.\n\nUse presence_track to add numbers.',
     });
     return;
   }
@@ -263,7 +268,8 @@ export async function handlePresenceStatus(
 
   if (!isPresenceTrackerEnabled()) {
     writeIpcResponse(sourceGroup, data.requestId, {
-      result: '❌ Presence tracker is disabled (PRESENCE_TRACKER_ENABLED != true)',
+      result:
+        '❌ Presence tracker is disabled (PRESENCE_TRACKER_ENABLED != true)',
     });
     return;
   }

@@ -40,6 +40,7 @@ import { DailyStats, PresenceEvent, TrackedNumber } from './types.js';
 export class PresenceTracker {
   private sock: WASocket | null = null;
   private trackedJids: Set<string> = new Set();
+  private lidToJid: Map<string, string> = new Map(); // LID -> phone JID mapping
   private currentSessions: Map<string, number> = new Map(); // jid -> online start timestamp
   private authDir: string;
   private storeDir: string;
@@ -93,9 +94,14 @@ export class PresenceTracker {
 
       // Save QR as image
       const qrPath = path.join(this.storeDir, 'presence-qr.png');
-      QRCode.toFile(qrPath, qr, { width: 400 }, (err: Error | null | undefined) => {
-        if (!err) logger.info({ qrPath }, 'QR code saved');
-      });
+      QRCode.toFile(
+        qrPath,
+        qr,
+        { width: 400 },
+        (err: Error | null | undefined) => {
+          if (!err) logger.info({ qrPath }, 'QR code saved');
+        },
+      );
     }
 
     if (connection === 'close') {
@@ -128,7 +134,46 @@ export class PresenceTracker {
   private loadTrackedNumbers(): void {
     const jids = getTrackedJids();
     this.trackedJids = new Set(jids);
-    logger.info({ count: this.trackedJids.size }, 'Presence tracker loaded tracked numbers');
+    
+    // Load LID mappings for tracked numbers
+    this.loadLidMappings();
+    
+    logger.info(
+      { count: this.trackedJids.size, lidMappings: this.lidToJid.size },
+      'Presence tracker loaded tracked numbers',
+    );
+  }
+  
+  private loadLidMappings(): void {
+    this.lidToJid.clear();
+    
+    // Read LID mapping files from auth directory
+    // Format: lid-mapping-{phoneNumber}.json contains the LID as a string
+    try {
+      const files = fs.readdirSync(this.authDir);
+      for (const file of files) {
+        const match = file.match(/^lid-mapping-(\d+)\.json$/);
+        if (match) {
+          const phone = match[1];
+          const jid = `${phone}@s.whatsapp.net`;
+          
+          // Only load mappings for tracked numbers
+          if (this.trackedJids.has(jid)) {
+            try {
+              const lidStr = fs.readFileSync(path.join(this.authDir, file), 'utf-8');
+              const lid = JSON.parse(lidStr);
+              const lidJid = `${lid}@lid`;
+              this.lidToJid.set(lidJid, jid);
+              logger.debug({ phone, lid, lidJid }, 'Loaded LID mapping');
+            } catch (err) {
+              logger.warn({ file, err }, 'Failed to read LID mapping file');
+            }
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Failed to read LID mappings from auth directory');
+    }
   }
 
   private async subscribeToAll(): Promise<void> {
@@ -153,7 +198,13 @@ export class PresenceTracker {
   ): void {
     const { presences } = update;
 
-    for (const [jid, presence] of Object.entries(presences)) {
+    for (let [jid, presence] of Object.entries(presences)) {
+      // Convert LID to phone JID if we have a mapping
+      const phoneJid = this.lidToJid.get(jid);
+      if (phoneJid) {
+        jid = phoneJid;
+      }
+      
       if (!this.trackedJids.has(jid)) continue;
 
       const status = presence.lastKnownPresence;

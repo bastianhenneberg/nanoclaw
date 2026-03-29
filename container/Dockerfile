@@ -25,6 +25,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     openssh-client \
+    python3 \
+    python3-pip \
+    ffmpeg \
+    && pip3 install --break-system-packages yt-dlp \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Chromium path for agent-browser

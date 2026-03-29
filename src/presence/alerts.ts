@@ -11,10 +11,7 @@ export type AlertSender = (chatId: string, message: string) => Promise<void>;
 let alertSender: AlertSender | null = null;
 let alertChatId: string | null = null;
 
-export function configureAlerts(
-  sender: AlertSender,
-  chatId: string,
-): void {
+export function configureAlerts(sender: AlertSender, chatId: string): void {
   alertSender = sender;
   alertChatId = chatId;
   logger.info({ chatId }, 'Presence alerts configured');

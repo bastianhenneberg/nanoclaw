@@ -49,7 +49,7 @@ async function sendTelegramAlert(message: string): Promise<void> {
     console.log('[TG] No bot token configured, skipping alert');
     return;
   }
-  
+
   try {
     const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
     const response = await fetch(url, {
@@ -61,7 +61,7 @@ async function sendTelegramAlert(message: string): Promise<void> {
         parse_mode: 'HTML',
       }),
     });
-    
+
     if (!response.ok) {
       console.error('[TG] Failed to send alert:', await response.text());
     }
@@ -104,7 +104,7 @@ export class PresenceTracker {
   async start() {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion();
-    
+
     const logger = pino({ level: 'silent' });
 
     this.sock = makeWASocket({
@@ -128,25 +128,34 @@ export class PresenceTracker {
         console.log('\n📱 Scan this QR code with WhatsApp:\n');
         qrcode.generate(qr, { small: true });
         console.log('\nWhatsApp > Settings > Linked Devices > Link a Device\n');
-        
+
         // Also save as image
         const qrPath = path.join(STORE_DIR, 'qr-code.png');
-        QRCode.toFile(qrPath, qr, { width: 400 }, (err: Error | null | undefined) => {
-          if (!err) console.log(`QR saved to: ${qrPath}`);
-        });
+        QRCode.toFile(
+          qrPath,
+          qr,
+          { width: 400 },
+          (err: Error | null | undefined) => {
+            if (!err) console.log(`QR saved to: ${qrPath}`);
+          },
+        );
       }
 
       if (connection === 'close') {
         const reason = (lastDisconnect?.error as Boom)?.output?.statusCode;
         const shouldReconnect = reason !== DisconnectReason.loggedOut;
-        
-        console.log(`Connection closed. Reason: ${DisconnectReason[reason] || reason}`);
-        
+
+        console.log(
+          `Connection closed. Reason: ${DisconnectReason[reason] || reason}`,
+        );
+
         if (shouldReconnect) {
           console.log('Reconnecting in 3s...');
           setTimeout(() => this.start(), 3000);
         } else {
-          console.log('Logged out. Delete store/presence-auth/ and restart to re-authenticate.');
+          console.log(
+            'Logged out. Delete store/presence-auth/ and restart to re-authenticate.',
+          );
         }
       }
 
@@ -163,8 +172,10 @@ export class PresenceTracker {
   }
 
   private loadTrackedNumbers() {
-    const rows = this.db.prepare('SELECT jid FROM tracked_numbers').all() as { jid: string }[];
-    this.trackedJids = new Set(rows.map(r => r.jid));
+    const rows = this.db.prepare('SELECT jid FROM tracked_numbers').all() as {
+      jid: string;
+    }[];
+    this.trackedJids = new Set(rows.map((r) => r.jid));
     console.log(`📋 Loaded ${this.trackedJids.size} tracked numbers`);
   }
 
@@ -176,7 +187,7 @@ export class PresenceTracker {
 
   private async subscribeToPresence(jid: string) {
     if (!this.sock) return;
-    
+
     try {
       await this.sock.presenceSubscribe(jid);
       console.log(`👁️ Subscribed to presence: ${jid}`);
@@ -187,7 +198,7 @@ export class PresenceTracker {
 
   private handlePresenceUpdate(update: BaileysEventMap['presence.update']) {
     const { id, presences } = update;
-    
+
     for (const [jid, presence] of Object.entries(presences)) {
       if (!this.trackedJids.has(jid)) continue;
 
@@ -195,14 +206,16 @@ export class PresenceTracker {
       const timestamp = Date.now();
 
       // Log the event
-      this.db.prepare(
-        'INSERT INTO presence_events (jid, status, timestamp) VALUES (?, ?, ?)'
-      ).run(jid, status, timestamp);
+      this.db
+        .prepare(
+          'INSERT INTO presence_events (jid, status, timestamp) VALUES (?, ?, ?)',
+        )
+        .run(jid, status, timestamp);
 
       // Track sessions
       const name = this.formatJid(jid);
       const timeStr = new Date(timestamp).toLocaleTimeString('de-DE');
-      
+
       if (status === 'available') {
         if (!this.currentSessions.has(jid)) {
           this.currentSessions.set(jid, timestamp);
@@ -227,7 +240,9 @@ export class PresenceTracker {
   }
 
   private formatJid(jid: string): string {
-    const row = this.db.prepare('SELECT label FROM tracked_numbers WHERE jid = ?').get(jid) as { label?: string } | undefined;
+    const row = this.db
+      .prepare('SELECT label FROM tracked_numbers WHERE jid = ?')
+      .get(jid) as { label?: string } | undefined;
     if (row?.label) return row.label;
     return jid.replace('@s.whatsapp.net', '');
   }
@@ -236,18 +251,20 @@ export class PresenceTracker {
 
   addNumber(phone: string, label?: string): boolean {
     const jid = phone.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-    
+
     try {
-      this.db.prepare(
-        'INSERT OR REPLACE INTO tracked_numbers (jid, label, added_at) VALUES (?, ?, ?)'
-      ).run(jid, label || null, Date.now());
-      
+      this.db
+        .prepare(
+          'INSERT OR REPLACE INTO tracked_numbers (jid, label, added_at) VALUES (?, ?, ?)',
+        )
+        .run(jid, label || null, Date.now());
+
       this.trackedJids.add(jid);
-      
+
       if (this.sock) {
         this.subscribeToPresence(jid);
       }
-      
+
       console.log(`➕ Added ${label || phone} (${jid}) to tracking`);
       return true;
     } catch (err) {
@@ -258,7 +275,7 @@ export class PresenceTracker {
 
   removeNumber(phone: string): boolean {
     const jid = phone.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-    
+
     try {
       this.db.prepare('DELETE FROM tracked_numbers WHERE jid = ?').run(jid);
       this.trackedJids.delete(jid);
@@ -271,34 +288,46 @@ export class PresenceTracker {
   }
 
   listTracked(): Array<{ jid: string; label: string | null; addedAt: number }> {
-    return this.db.prepare(
-      'SELECT jid, label, added_at as addedAt FROM tracked_numbers'
-    ).all() as Array<{ jid: string; label: string | null; addedAt: number }>;
+    return this.db
+      .prepare('SELECT jid, label, added_at as addedAt FROM tracked_numbers')
+      .all() as Array<{ jid: string; label: string | null; addedAt: number }>;
   }
 
   getStats(phone: string, days: number = 7): DailyStats[] {
     const jid = phone.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-    const since = Date.now() - (days * 24 * 60 * 60 * 1000);
+    const since = Date.now() - days * 24 * 60 * 60 * 1000;
 
-    const events = this.db.prepare(`
+    const events = this.db
+      .prepare(
+        `
       SELECT status, timestamp 
       FROM presence_events 
       WHERE jid = ? AND timestamp > ?
       ORDER BY timestamp ASC
-    `).all(jid, since) as PresenceEvent[];
+    `,
+      )
+      .all(jid, since) as PresenceEvent[];
 
     // Group by day and calculate stats
-    const dailyMap = new Map<string, { sessions: number; totalMs: number; firstSeen: number; lastSeen: number }>();
+    const dailyMap = new Map<
+      string,
+      { sessions: number; totalMs: number; firstSeen: number; lastSeen: number }
+    >();
 
     let sessionStart: number | null = null;
 
     for (const event of events) {
       const date = new Date(event.timestamp).toISOString().split('T')[0];
-      
+
       if (!dailyMap.has(date)) {
-        dailyMap.set(date, { sessions: 0, totalMs: 0, firstSeen: event.timestamp, lastSeen: event.timestamp });
+        dailyMap.set(date, {
+          sessions: 0,
+          totalMs: 0,
+          firstSeen: event.timestamp,
+          lastSeen: event.timestamp,
+        });
       }
-      
+
       const day = dailyMap.get(date)!;
       day.lastSeen = event.timestamp;
 
@@ -323,14 +352,18 @@ export class PresenceTracker {
 
   getRecentEvents(phone: string, limit: number = 50): PresenceEvent[] {
     const jid = phone.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-    
-    return this.db.prepare(`
+
+    return this.db
+      .prepare(
+        `
       SELECT jid, status, timestamp 
       FROM presence_events 
       WHERE jid = ?
       ORDER BY timestamp DESC
       LIMIT ?
-    `).all(jid, limit) as PresenceEvent[];
+    `,
+      )
+      .all(jid, limit) as PresenceEvent[];
   }
 }
 
@@ -365,7 +398,9 @@ async function main() {
     case 'list':
       const tracked = tracker.listTracked();
       if (tracked.length === 0) {
-        console.log('No numbers tracked yet. Use: presence-tracker add <phone> [label]');
+        console.log(
+          'No numbers tracked yet. Use: presence-tracker add <phone> [label]',
+        );
       } else {
         console.log('\nTracked numbers:');
         for (const t of tracked) {
@@ -384,10 +419,14 @@ async function main() {
         console.log('No data yet for this number.');
       } else {
         console.log('\nDaily statistics:');
-        console.log('Date       | Sessions | Online Time | First Seen | Last Seen');
+        console.log(
+          'Date       | Sessions | Online Time | First Seen | Last Seen',
+        );
         console.log('-'.repeat(65));
         for (const s of stats) {
-          console.log(`${s.date} | ${String(s.sessions).padStart(8)} | ${String(s.totalMinutes).padStart(7)}min | ${s.firstSeen.padStart(10)} | ${s.lastSeen}`);
+          console.log(
+            `${s.date} | ${String(s.sessions).padStart(8)} | ${String(s.totalMinutes).padStart(7)}min | ${s.firstSeen.padStart(10)} | ${s.lastSeen}`,
+          );
         }
       }
       break;
@@ -404,7 +443,12 @@ async function main() {
         console.log('\nRecent events:');
         for (const e of events) {
           const time = new Date(e.timestamp).toLocaleString();
-          const icon = e.status === 'available' ? '🟢' : e.status === 'unavailable' ? '🔴' : '✍️';
+          const icon =
+            e.status === 'available'
+              ? '🟢'
+              : e.status === 'unavailable'
+                ? '🔴'
+                : '✍️';
           console.log(`${icon} ${time} - ${e.status}`);
         }
       }
